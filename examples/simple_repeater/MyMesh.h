@@ -35,6 +35,7 @@
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RegionMap.h>
 #include <helpers/RoutingPolicy.h>
+#include <helpers/FloodTest.h>
 #include "RateLimiter.h"
 
 #ifdef WITH_BRIDGE
@@ -71,7 +72,7 @@ struct NeighbourInfo {
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.18.0"
+  #define FIRMWARE_VERSION   "v1.18.0+rflab_piie"
 #endif
 
 #define FIRMWARE_ROLE "repeater"
@@ -95,6 +96,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   RegionEntry* load_stack[8];
   RegionEntry* recv_pkt_region;
   TransportKey default_scope;
+  FloodTest flood_test;
+  TransportKey flood_test_scope;
+  char flood_test_region[31];
   RateLimiter discover_limiter, anon_limiter;
   uint32_t pending_discover_tag;
   unsigned long pending_discover_until;
@@ -123,6 +127,9 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   uint8_t handleAnonClockReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data);
   int handleRequest(ClientInfo* sender, uint32_t sender_timestamp, uint8_t* payload, size_t payload_len);
   mesh::Packet* createSelfAdvert();
+  bool handleFloodTestCommand(uint32_t sender_timestamp, const char* command, char* reply);
+  void pumpFloodTest();
+  void printFloodTestWarning();
 
   File openAppend(const char* fname);
   bool isLooped(const mesh::Packet* packet, const uint8_t max_counters[]);

@@ -1,0 +1,3 @@
+[submodule "tools/flipper-dutycycle"]
+	path = tools/flipper-dutycycle
+	url = git@github.com:xypiie/MC-Dutycycle.git

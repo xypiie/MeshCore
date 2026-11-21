@@ -503,6 +503,10 @@ void MyMesh::logRx(mesh::Packet *pkt, int len, float score) {
 }
 
 void MyMesh::logTx(mesh::Packet *pkt, int len) {
+  if (flood_test.owns(pkt)) {
+    const uint32_t airtime = _radio->getEstAirtimeFor(pkt->getRawLength());
+    flood_test.finished(pkt, true, _ms->getMillis(), airtime);
+  }
 #ifdef WITH_BRIDGE
   if (_prefs.bridge_pkt_src == 0) {
     bridge.sendPacket(pkt);
@@ -528,6 +532,7 @@ void MyMesh::logTx(mesh::Packet *pkt, int len) {
 }
 
 void MyMesh::logTxFail(mesh::Packet *pkt, int len) {
+  flood_test.finished(pkt, false, _ms->getMillis());
   if (_logging) {
     File f = openAppend(PACKET_LOG_FILE);
     if (f) {
@@ -882,6 +887,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   _logging = false;
   region_load_active = false;
   recv_pkt_region = NULL;
+  flood_test_region[0] = 0;
 
 #if MAX_NEIGHBOURS
   memset(neighbours, 0, sizeof(neighbours));
@@ -1238,6 +1244,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
     command += 3;
   }
 
+  if (handleFloodTestCommand(sender_timestamp, command, reply)) return;
+
   // handle ACL related commands
   if (memcmp(command, "setperm ", 8) == 0) {   // format:  setperm {pubkey-hex} {permissions-int8}
     char* hex = &command[8];
@@ -1286,12 +1294,89 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
   }
 }
 
+void MyMesh::printFloodTestWarning() {
+  Serial.println("LAB RF TEST: use shielding for extended runs; check preceding-hour airtime.");
+  Serial.println("After the last TX, take the repeater offline for 60 minutes.");
+  Serial.println("The operator is responsible for legal operation; this is the original limiter.");
+}
+
+bool MyMesh::handleFloodTestCommand(uint32_t timestamp, const char* command, char* reply) {
+  FloodTest::Request request;
+  auto action = FloodTest::parse(command, timestamp == 0, request, reply, 157);
+  if (action == FloodTest::NotHandled) return false;
+  if (action == FloodTest::Invalid) return true;
+  uint32_t now = _ms->getMillis();
+  if (action == FloodTest::Status) {
+    snprintf(reply, 157, "%s %s: %lu/%lu ms, generated=%lu sent=%lu failed=%lu",
+      flood_test.active() ? "running" : flood_test.busy() ? "finishing" : "idle",
+      flood_test_region, (unsigned long)flood_test.elapsed(now),
+      (unsigned long)flood_test.duration(), (unsigned long)flood_test.generated(),
+      (unsigned long)flood_test.sent(), (unsigned long)flood_test.failed());
+  } else if (action == FloodTest::Stop) {
+    flood_test.stop(now, *_mgr);
+    snprintf(reply, 157, "OK - pending test packets cancelled; an active TX finishes normally");
+  } else if (flood_test.busy()) {
+    snprintf(reply, 157, "Err - a flood test is already running or finishing");
+  } else {
+    if (_prefs.path_hash_mode > 2) {
+      snprintf(reply, 157, "Err - invalid path hash mode");
+      return true;
+    }
+    TransportKey scope{};
+    const char* scope_name = "<unscoped>";
+    if (request.region[0]) {
+      auto region = region_map.findByName(request.region);
+      if (!region || region->isWildcard() || (region->flags & REGION_DENY_FLOOD) ||
+          region_map.getTransportKeysFor(*region, &scope, 1) != 1 || scope.isNull()) {
+        snprintf(reply, 157, "Err - select an existing allowed named region with a transport key");
+        return true;
+      }
+      scope_name = region->name;
+    }
+    printFloodTestWarning();
+    Serial.printf("RF: %.3f MHz, BW %.1f, SF %u, CR %u, TX %d dBm, duty %.1f%%\n",
+      _prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr, _prefs.tx_power_dbm,
+      100.0f / (1.0f + _prefs.airtime_factor));
+    uint32_t run_id;
+    getRNG()->random((uint8_t*)&run_id, sizeof(run_id));
+    flood_test_scope = scope;
+    strcpy(flood_test_region, scope_name);
+    flood_test.start(_ms->getMillis(), request.seconds, run_id, request.paced);
+    snprintf(reply, 157, "OK - flood %lu s, %s, scope=%s; use flood status or flood stop",
+             (unsigned long)request.seconds, request.paced ? "paced" : "continuous",
+             flood_test_region);
+  }
+  return true;
+}
+
+void MyMesh::pumpFloodTest() {
+  flood_test.expire(_ms->getMillis(), *_mgr);
+  if (flood_test.canQueue(_ms->getMillis()) && _mgr->getFreeCount() > 1) {
+    uint8_t data[MAX_PACKET_PAYLOAD];
+    flood_test.payload(data, sizeof(data));
+    auto packet = createRawData(data, sizeof(data));
+    if (packet) {
+      flood_test.queued(packet);
+      sendFloodScoped(flood_test_scope, packet, 0, _prefs.path_hash_mode + 1);
+    }
+  }
+  if (flood_test.takeReport()) {
+    Serial.printf("Flood complete: %lu ms, generated=%lu sent=%lu failed=%lu\n",
+      (unsigned long)flood_test.elapsed(_ms->getMillis()),
+      (unsigned long)flood_test.generated(), (unsigned long)flood_test.sent(),
+      (unsigned long)flood_test.failed());
+    printFloodTestWarning();
+  }
+}
+
 void MyMesh::loop() {
 #ifdef WITH_BRIDGE
   bridge.loop();
 #endif
 
+  flood_test.expire(_ms->getMillis(), *_mgr);
   mesh::Mesh::loop();
+  pumpFloodTest();
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();
@@ -1333,6 +1418,7 @@ void MyMesh::loop() {
 
 // To check if there is pending work
 bool MyMesh::hasPendingWork() const {
+  if (flood_test.busy()) return true;
 #if defined(WITH_BRIDGE)
   if (bridge.isRunning()) return true;  // bridge needs WiFi radio, can't sleep
 #endif

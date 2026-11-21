@@ -83,6 +83,30 @@ This document provides an overview of CLI commands that can be sent to MeshCore 
 
 ---
 
+### Generate bounded lab traffic (Repeater Only)
+
+**Usage:**
+- `flood [--continuous] <seconds> [region]`
+- `flood status`
+- `flood stop`
+
+**Local Terminal Only:** Yes
+
+Uses the named region when supplied; omitting it sends unscoped traffic,
+including when the node has a default scope configured. Both use the normal
+transmit queue and duty-cycle limiter. The duration is an integer from 1 to 7,200
+wall-clock seconds. By default the test waits one packet's estimated airtime
+after each transmission. Use `--continuous` to omit that pause. A queued test packet is cancelled on expiry or stop;
+an active transmission finishes normally. Raw-custom flood payloads are not
+relayed by baseline peers.
+
+**Warning:** Attended lab use only. Use an RF shielded setup for extended runs. Account for preceding-hour airtime and
+permitted frequency/power. After the last transmission, take the repeater
+offline for 60 minutes. The operator remains responsible for legal operation.
+See [the experiment instructions](rf_dutycycle_experiment.md) for details.
+
+---
+
 ### Start an Over-The-Air (OTA) firmware update
 **Usage:**
 - `start ota`
