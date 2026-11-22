@@ -3,8 +3,9 @@
 This experiment is based on MeshCore **81dbae59** and targets an attended
 Heltec V3 repeater in an RF shielded lab. It adds a local-terminal traffic producer and the
 [MC-Dutycycle Flipper app](../tools/flipper-dutycycle/README.md).
-Commit `c03a16dc` used the original packet admission threshold. The dispatcher
-now requires enough credit for the next packet's estimated airtime.
+Commit `c03a16dc` used the original limiter for the baseline measurement.
+Current builds divide the rolling TX allowance into burst and paced quotas.
+The saved `dutycycle.burst` setting defaults to a 50/50 split.
 
 ## Repeater
 
@@ -25,7 +26,7 @@ set radio 869.618,62.5,8,8
 set dutycycle 10
 ```
 
-The `ver` command should report `v1.18.0+rflab_piie` for this experiment build.
+The `ver` command should report `v1.18.0+rflab+txburst_piie` for this build.
 
 For a scoped test, create or select an allowed named region:
 
@@ -76,10 +77,11 @@ routes; flood-route raw-custom frames are released without relaying. The test
 therefore sends scoped or unscoped frames without being repeated by upstream
 peers with that behavior. No changes to receiver/forwarding code are required.
 
-Use the shielded setup for the two-hour experiment. The starting budget can
-allow more than 10% in a rolling hour even when configured at 10%. Other repeater
-traffic, including adverts, can also contribute to the RF trace and consume
-budget.
+Use the shielded setup for the two-hour experiment. The original limiter used
+for the baseline measurement could exceed 10% in a rolling hour. With current
+firmware, use `set dutycycle.burst 100` to test the full burst allowance under
+the rolling limit. Other repeater traffic, including adverts, can contribute
+to the RF trace and consume budget.
 
 ## Receiver and interpretation
 

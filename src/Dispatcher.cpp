@@ -24,6 +24,9 @@ void Dispatcher::begin() {
   duty_cycle_window_ms = getDutyCycleWindowMs();
   float duty_cycle = 1.0f / (1.0f + getAirtimeBudgetFactor());
   tx_budget_ms = (unsigned long)(duty_cycle_window_ms * duty_cycle);
+  pacing_update_ms = _ms->getMillis();
+  pacing_debt_ms = 0;
+  tx_airtime_window.begin(pacing_update_ms, duty_cycle_window_ms);
   last_budget_update = _ms->getMillis();
 
   _radio->begin();
@@ -51,6 +54,60 @@ void Dispatcher::updateTxBudget() {
   }
 }
 
+void Dispatcher::advanceRollingTx(uint32_t now) {
+  tx_airtime_window.advance(now);
+  const uint32_t elapsed = now - pacing_update_ms;
+  pacing_debt_ms = elapsed >= pacing_debt_ms ? 0 : pacing_debt_ms - elapsed;
+  pacing_update_ms = now;
+}
+
+uint32_t Dispatcher::rollingTxLimit() const {
+  const double factor = getAirtimeBudgetFactor();
+  return factor >= 0 ? duty_cycle_window_ms / (1.0 + factor) : 0;
+}
+
+unsigned long Dispatcher::getRemainingTxBudget() const {
+  if (getDutyCycleBurstPercent() < 0) return tx_budget_ms;
+  const uint32_t limit = rollingTxLimit();
+  const uint32_t used = tx_airtime_window.used();
+  return used < limit ? limit - used : 0;
+}
+
+Dispatcher::TxAllowance Dispatcher::rollingTxAllowance(uint32_t airtime_ms, int burst_percent,
+                                                       uint32_t& spacing_ms) const {
+  if (getAirtimeBudgetFactor() == 0) return TxAllowance::Burst;  // Unrestricted TX.
+  const uint32_t limit = rollingTxLimit();
+  const uint32_t used = tx_airtime_window.used();
+  if (!limit || used >= limit || airtime_ms > limit - used) return TxAllowance::Blocked;
+
+  const uint32_t burst_limit = (uint64_t)limit * burst_percent / 100;
+  const uint32_t paced_limit = limit - burst_limit;
+  const uint32_t burst_used = tx_airtime_window.burstUsed();
+  const bool fits_burst = burst_used < burst_limit && airtime_ms <= burst_limit - burst_used;
+  const uint32_t paced_used = used - burst_used;
+  const bool fits_paced = pacing_debt_ms == 0 && paced_used < paced_limit &&
+                         airtime_ms <= paced_limit - paced_used;
+  if (!fits_burst && !fits_paced) return TxAllowance::Blocked;
+
+  if (paced_limit) {
+    // Spread the paced quota over the time left after a contiguous full burst.
+    const uint64_t paced_time = duty_cycle_window_ms - burst_limit;
+    const uint64_t spacing = (airtime_ms * paced_time + paced_limit - 1) / paced_limit;
+    spacing_ms = spacing > UINT32_MAX ? UINT32_MAX : spacing;
+  }
+  return fits_burst ? TxAllowance::Burst : TxAllowance::Paced;
+}
+
+void Dispatcher::recordRollingTx(uint32_t now, uint32_t elapsed_ms) {
+  advanceRollingTx(now);
+  const uint32_t charged = elapsed_ms > outbound_airtime_ms ? elapsed_ms : outbound_airtime_ms;
+  tx_airtime_window.record(charged, outbound_is_burst);
+
+  // A burst packet may bypass the pacer. Its spacing still applies when the
+  // next packet needs the paced quota, so it cannot extend the continuous burst.
+  pacing_debt_ms = outbound_spacing_ms > elapsed_ms ? outbound_spacing_ms - elapsed_ms : 0;
+}
+
 int Dispatcher::calcRxDelay(float score, uint32_t air_time) const {
   return (int) ((pow(10, 0.85f - score) - 1.0) * air_time);
 }
@@ -63,6 +120,8 @@ uint32_t Dispatcher::getCADFailMaxDuration() const {
 }
 
 void Dispatcher::loop() {
+  const bool rolling = getDutyCycleBurstPercent() >= 0;
+  if (rolling) advanceRollingTx(_ms->getMillis());
   if (millisHasNowPassed(next_floor_calib_time)) {
     _radio->triggerNoiseFloorCalibrate(getInterferenceThreshold());
     _radio->setCADEnabled(getCADEnabled());
@@ -84,24 +143,29 @@ void Dispatcher::loop() {
 
   if (outbound) {  // waiting for outbound send to be completed
     if (_radio->isSendComplete()) {
-      long t = _ms->getMillis() - outbound_start;
+      const uint32_t t = (uint32_t)_ms->getMillis() - (uint32_t)outbound_start;
       total_air_time += t;
       //Serial.print("  airtime="); Serial.println(t);
 
-      updateTxBudget();
-
-      if (t > tx_budget_ms) {
-        tx_budget_ms = 0;
-      } else {
-        tx_budget_ms -= t;
-      }
-
-      if (tx_budget_ms < MIN_TX_BUDGET_RESERVE_MS) {
-        float duty_cycle = 1.0f / (1.0f + getAirtimeBudgetFactor());
-        unsigned long needed = MIN_TX_BUDGET_RESERVE_MS - tx_budget_ms;
-        next_tx_time = futureMillis((unsigned long)(needed / duty_cycle));
-      } else {
+      if (rolling) {
+        recordRollingTx(_ms->getMillis(), t);
         next_tx_time = _ms->getMillis();
+      } else {
+        updateTxBudget();
+
+        if (t > tx_budget_ms) {
+          tx_budget_ms = 0;
+        } else {
+          tx_budget_ms -= t;
+        }
+
+        if (tx_budget_ms < MIN_TX_BUDGET_RESERVE_MS) {
+          float duty_cycle = 1.0f / (1.0f + getAirtimeBudgetFactor());
+          unsigned long needed = MIN_TX_BUDGET_RESERVE_MS - tx_budget_ms;
+          next_tx_time = futureMillis((unsigned long)(needed / duty_cycle));
+        } else {
+          next_tx_time = _ms->getMillis();
+        }
       }
 
       _radio->onSendFinished();
@@ -117,6 +181,10 @@ void Dispatcher::loop() {
       MESH_DEBUG_PRINTLN("%s Dispatcher::loop(): WARNING: outbound packed send timed out!", getLogDateTime());
 
       _radio->onSendFinished();
+      if (rolling) {
+        const uint32_t now = _ms->getMillis();
+        recordRollingTx(now, now - (uint32_t)outbound_start);
+      }
       logTxFail(outbound, 2 + outbound->getPathByteLen() + outbound->payload_len);
 
       releasePacket(outbound);  // return to pool
@@ -276,13 +344,21 @@ void Dispatcher::checkSend() {
   const Packet* next = _mgr->peekNextOutbound(now);
   if (!next) return;
 
-  updateTxBudget();
+  const int burst_percent = getDutyCycleBurstPercent();
+  if (burst_percent < 0) updateTxBudget();
   if (!millisHasNowPassed(next_tx_time)) return;
 
   const int frame_len = next->getRawLength();
   // Let the existing validation discard oversized frames without estimating airtime.
   const uint32_t est_airtime = frame_len <= MAX_TRANS_UNIT ? _radio->getEstAirtimeFor(frame_len) : 0;
-  if (tx_budget_ms < est_airtime) return;
+  uint32_t spacing_ms = 0;
+  TxAllowance allowance = TxAllowance::Blocked;
+  if (burst_percent < 0) {
+    if (tx_budget_ms < est_airtime) return;
+  } else if (frame_len <= MAX_TRANS_UNIT) {
+    allowance = rollingTxAllowance(est_airtime, burst_percent, spacing_ms);
+    if (allowance == TxAllowance::Blocked) return;
+  }
 
   if (_radio->isReceiving()) {
     if (cad_busy_start == 0) {
@@ -334,6 +410,9 @@ void Dispatcher::checkSend() {
         outbound = NULL;
         return;
       }
+      outbound_airtime_ms = est_airtime;
+      outbound_spacing_ms = spacing_ms;
+      outbound_is_burst = allowance == TxAllowance::Burst;
       outbound_expiry = futureMillis(max_airtime);
 
     #if MESH_PACKET_LOGGING

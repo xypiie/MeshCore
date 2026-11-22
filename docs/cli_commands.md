@@ -601,6 +601,29 @@ See [the experiment instructions](rf_dutycycle_experiment.md) for details.
 
 ---
 
+#### View or change burst pacing (Repeater Only)
+
+- `get dutycycle.burst`
+- `set dutycycle.burst <0-100>`
+
+The setting is saved and defaults to 50. It divides the rolling-hour airtime
+allowance into two quotas. The burst quota can be used back-to-back. The paced
+quota is spread over the hour minus the duration of a full continuous burst.
+Each packet must fit in one quota.
+
+At 10% duty cycle and a 50% burst split, up to 180 seconds of airtime can be
+used in a burst. The other 180 seconds are paced over 57 minutes. With
+one-second packets, the paced quota allows one packet every 19 seconds.
+At 100, all airtime is available for bursts. At 0, the entire allowance is
+paced at the configured duty cycle.
+
+Every burst setting shares the limit set by `set dutycycle`. The repeater
+counts recent airtime in one-minute buckets and retains the entire oldest
+overlapping bucket. This can delay credit returning by up to one minute.
+Airtime history is held in RAM and clears on reboot.
+
+---
+
 #### View or change the airtime factor (duty cycle limit)
 > **Deprecated** as of firmware v1.15.0. Use [`get/set dutycycle`](#view-or-change-the-duty-cycle-limit) instead.
 

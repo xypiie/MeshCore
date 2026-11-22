@@ -72,6 +72,8 @@ public:
   uint8_t loop_detect = 0;
   uint8_t cad_enabled = 0;      // hardware Channel Activity Detection before TX (boolean)
   uint8_t extra_sf[4];
+  static constexpr uint8_t DefaultDutyCycleBurst = 50;
+  uint8_t duty_cycle_burst = DefaultDutyCycleBurst;
 
 private:
   class RadioPrefs : public CommonRadioPrefs {
@@ -186,6 +188,7 @@ private:
       def("f_max_uns", _parent->flood_max_unscoped);
       def("f_max_adv", _parent->flood_max_advert);
       def("loop", _parent->loop_detect);
+      def("dc_burst", _parent->duty_cycle_burst);
     }
   public:
     RepeatPrefs(NodePrefs* parent) : _parent(parent) { }

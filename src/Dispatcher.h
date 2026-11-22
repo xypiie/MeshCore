@@ -5,6 +5,7 @@
 #include <Packet.h>
 #include <Utils.h>
 #include <string.h>
+#include "helpers/TxAirtimeWindow.h"
 
 namespace mesh {
 
@@ -130,6 +131,19 @@ class Dispatcher {
   unsigned long last_budget_update;
   unsigned long duty_cycle_window_ms;
 
+  TxAirtimeWindow tx_airtime_window;
+  uint32_t pacing_update_ms = 0, pacing_debt_ms = 0;
+  uint32_t outbound_airtime_ms = 0, outbound_spacing_ms = 0;
+  bool outbound_is_burst = false;
+
+  enum class TxAllowance { Blocked, Burst, Paced };
+
+  void advanceRollingTx(uint32_t now);
+  uint32_t rollingTxLimit() const;
+  TxAllowance rollingTxAllowance(uint32_t airtime_ms, int burst_percent,
+                                 uint32_t& spacing_ms) const;
+  void recordRollingTx(uint32_t now, uint32_t elapsed_ms);
+
   void processRecvPacket(Packet* pkt);
   void updateTxBudget();
 
@@ -165,6 +179,8 @@ protected:
   virtual const char* getLogDateTime() { return ""; }
 
   virtual float getAirtimeBudgetFactor() const;
+  // Negative selects the legacy budget for devices without rolling TX control.
+  virtual int getDutyCycleBurstPercent() const { return -1; }
   virtual int calcRxDelay(float score, uint32_t air_time) const;
   virtual uint32_t getCADFailRetryDelay() const;
   virtual uint32_t getCADFailMaxDuration() const;
@@ -183,7 +199,7 @@ public:
 
   unsigned long getTotalAirTime() const { return total_air_time; }
   unsigned long getReceiveAirTime() const {return rx_air_time; }
-  unsigned long getRemainingTxBudget() const { return tx_budget_ms; }
+  unsigned long getRemainingTxBudget() const;
   uint32_t getNumSentFlood() const { return n_sent_flood; }
   uint32_t getNumSentDirect() const { return n_sent_direct; }
   uint32_t getNumRecvFlood() const { return n_recv_flood; }

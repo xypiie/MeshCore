@@ -72,7 +72,7 @@ struct NeighbourInfo {
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.18.0+rflab_piie"
+  #define FIRMWARE_VERSION   "v1.18.0+rflab+txburst_piie"
 #endif
 
 #define FIRMWARE_ROLE "repeater"
@@ -137,6 +137,10 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 protected:
   float getAirtimeBudgetFactor() const override {
     return _prefs.airtime_factor;
+  }
+  int getDutyCycleBurstPercent() const override {
+    return _prefs.duty_cycle_burst <= 100 ? _prefs.duty_cycle_burst :
+                                           NodePrefs::DefaultDutyCycleBurst;
   }
 
   bool allowPacketForward(const mesh::Packet* packet) override;

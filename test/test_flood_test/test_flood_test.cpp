@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 #include "helpers/FloodTest.h"
@@ -63,11 +64,14 @@ class Radio : public mesh::Radio {
 public:
   bool busy = false, succeeds = true, completes = true;
   bool airtime_by_length = false;
+  uint32_t fixed_airtime_ms = 50;
   std::vector<uint32_t> starts;
   std::vector<mesh::Packet> frames;
   explicit Radio(Clock& value) : clock(value) { }
   int recvRaw(uint8_t*, int) override { return 0; }
-  uint32_t getEstAirtimeFor(int len) override { return airtime_by_length ? len : 50; }
+  uint32_t getEstAirtimeFor(int len) override {
+    return airtime_by_length ? len : fixed_airtime_ms;
+  }
   float packetScore(float, int) override { return 1; }
   bool isInRecvMode() const override { return !sending; }
   bool isReceiving() override { return busy; }
@@ -93,9 +97,11 @@ protected:
   void logTx(mesh::Packet* packet, int) override { job.finished(packet, true, _ms->getMillis(), _radio->getEstAirtimeFor(packet->getRawLength())); }
   void logTxFail(mesh::Packet* packet, int) override { job.finished(packet, false, _ms->getMillis()); }
   float getAirtimeBudgetFactor() const override { return factor; }
+  int getDutyCycleBurstPercent() const override { return burst; }
   unsigned long getDutyCycleWindowMs() const override { return window; }
 public:
   float factor = 1;
+  int burst = -1;
   uint32_t window = 3600000;
   Dispatcher(Radio& radio, Clock& clock, StaticPoolPacketManager& packets, FloodTest& flood)
     : mesh::Dispatcher(radio, clock, packets), job(flood) { }
@@ -125,9 +131,9 @@ protected:
     job.queued(packet);
     dispatcher.sendPacket(packet, 1);
   }
-  void advance(uint32_t duration) {
-    for (uint32_t i = 0; i < duration; ++i) {
-      ++clock.now;
+  void advance(uint32_t duration, uint32_t step = 1) {
+    for (uint32_t i = 0; i < duration; i += step) {
+      clock.now += step;
       job.expire(clock.now, packets);
       dispatcher.loop();
       job.expire(clock.now, packets);
@@ -317,6 +323,96 @@ TEST_F(FloodProducer, DurationValidationAndMillisWrap) {
   EXPECT_FALSE(job.expire(0, packets));
   EXPECT_TRUE(job.expire(500, packets));
   EXPECT_EQ(1000u, job.elapsed(500));
+}
+
+TEST_F(FloodProducer, FullBurstStaysWithinEveryRollingHourUnderTwoHoursOfLoad) {
+  constexpr uint32_t hour = 3600000;
+  constexpr uint32_t cap = 360000;
+  constexpr uint32_t airtime = 1000;
+  dispatcher.factor = 9;
+  dispatcher.burst = 100;
+  dispatcher.begin();
+  radio.fixed_airtime_ms = airtime;
+  const uint32_t start = clock.now;
+  ASSERT_TRUE(job.start(start, 7200, 1, false));
+  advance(2 * hour + airtime, 10);
+
+  ASSERT_GT(radio.starts.size(), 690u);
+  EXPECT_LT(radio.starts.front() - start, 100u);
+  // A maximum can only occur where a window endpoint meets a packet edge.
+  for (uint32_t tx : radio.starts) {
+    for (uint32_t edge : {tx, tx + airtime, tx + hour, tx + airtime + hour}) {
+      uint32_t used = 0;
+      for (uint32_t candidate : radio.starts) {
+        const int64_t left = std::max<int64_t>(candidate, (int64_t)edge - hour);
+        const int64_t right = std::min<int64_t>(candidate + airtime, edge);
+        if (right > left) used += right - left;
+      }
+      ASSERT_LE(used, cap) << "window ending at " << edge;
+    }
+  }
+
+  advance(hour + 60000, 1000);
+  EXPECT_EQ(cap, dispatcher.getRemainingTxBudget());
+  const auto previous = radio.starts.size();
+  ASSERT_TRUE(job.start(clock.now, 2, 2, false));
+  advance(1500, 10);
+  EXPECT_EQ(previous + 2, radio.starts.size());
+}
+
+TEST_F(FloodProducer, ZeroBurstPacesEachFrameAtTheConfiguredRate) {
+  dispatcher.factor = 9;
+  dispatcher.burst = 0;
+  dispatcher.begin();
+  ASSERT_TRUE(job.start(clock.now, 2, 1, false));
+  advance(2000);
+  ASSERT_EQ(4u, radio.starts.size());
+  for (size_t i = 1; i < radio.starts.size(); ++i) {
+    EXPECT_EQ(500u, radio.starts[i] - radio.starts[i - 1]);
+  }
+}
+
+TEST_F(FloodProducer, HalfBurstSpends180SecondsThenPacesTheRemaining57Minutes) {
+  constexpr uint32_t airtime = 1000;
+  constexpr uint32_t burst_packets = 180;
+  dispatcher.factor = 9;
+  dispatcher.burst = 50;
+  dispatcher.begin();
+  radio.fixed_airtime_ms = airtime;
+  const uint32_t start = clock.now;
+  ASSERT_TRUE(job.start(start, 7200, 1, false));
+  advance(190000, 10);
+  ASSERT_EQ(burst_packets, radio.starts.size());
+  for (uint32_t i = 1; i < burst_packets; ++i) {
+    EXPECT_LE(radio.starts[i] - radio.starts[i - 1], airtime + 10);
+  }
+  advance(3590000 - 190000, 10);
+  ASSERT_GT(radio.starts.size(), 350u);
+  ASSERT_LT(radio.starts.size(), 360u);
+  for (size_t i = burst_packets; i < radio.starts.size(); ++i) {
+    EXPECT_EQ(19000u, radio.starts[i] - radio.starts[i - 1]);
+  }
+  EXPECT_GT(radio.starts.back() - start, 3500000u);
+
+  const auto before_expiry = radio.starts.size();
+  advance(180000, 10);
+  // As old burst packets expire, their separate quota can be used again.
+  EXPECT_GT(radio.starts.size() - before_expiry, 100u);
+}
+
+TEST(TxAirtimeWindow, KeepsTheOldestOverlappingBucketAcrossMillisWrap) {
+  constexpr uint32_t start = UINT32_MAX - 500;
+  mesh::TxAirtimeWindow window;
+  window.begin(start, 60000);
+  window.advance(start + 999);
+  window.record(100, true);
+  window.record(20);
+  window.advance(start + 60998);
+  EXPECT_EQ(120u, window.used());
+  EXPECT_EQ(100u, window.burstUsed());
+  window.advance(start + 61000);
+  EXPECT_EQ(0u, window.used());
+  EXPECT_EQ(0u, window.burstUsed());
 }
 
 }  // namespace

@@ -1246,6 +1246,40 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 
   if (handleFloodTestCommand(sender_timestamp, command, reply)) return;
 
+  if (strcmp(command, "get dutycycle.burst") == 0) {
+    sprintf(reply, "> %d%%", getDutyCycleBurstPercent());
+    return;
+  }
+  static constexpr char burst_command[] = "set dutycycle.burst";
+  constexpr size_t burst_command_len = sizeof(burst_command) - 1;
+  if (strncmp(command, burst_command, burst_command_len) == 0 &&
+      (command[burst_command_len] == ' ' || command[burst_command_len] == 0)) {
+    const char* value = command + burst_command_len;
+    while (*value == ' ') ++value;
+    const char* digits = value;
+    unsigned percent = 0;
+    while (*value >= '0' && *value <= '9' && percent <= 100) {
+      percent = percent * 10 + *value++ - '0';
+    }
+    const bool has_digits = value != digits;
+    while (*value == ' ') ++value;
+    if (!has_digits || *value || percent > 100) {
+      strcpy(reply, "ERROR: dutycycle.burst must be an integer from 0 to 100");
+      return;
+    }
+    if (percent != _prefs.duty_cycle_burst) {
+      const uint8_t previous = _prefs.duty_cycle_burst;
+      _prefs.duty_cycle_burst = percent;
+      if (!_cli.savePrefs(_fs)) {
+        _prefs.duty_cycle_burst = previous;
+        strcpy(reply, "ERROR: could not save dutycycle.burst");
+        return;
+      }
+    }
+    sprintf(reply, "> %u%%", percent);
+    return;
+  }
+
   // handle ACL related commands
   if (memcmp(command, "setperm ", 8) == 0) {   // format:  setperm {pubkey-hex} {permissions-int8}
     char* hex = &command[8];
