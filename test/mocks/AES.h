@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef MESH_TEST_REAL_CRYPTO
+#include_next <AES.h>
+#else
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -11,3 +15,5 @@ public:
   void encryptBlock(uint8_t* output, const uint8_t* input) {}
   void decryptBlock(uint8_t* output, const uint8_t* input) {}
 };
+
+#endif

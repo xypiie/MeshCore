@@ -370,7 +370,8 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
       return reply_offset;
     }
   } else if (payload[0] == REQ_TYPE_GET_OWNER_INFO) {
-    sprintf((char *) &reply_data[4], "%s\n%s\n%s", FIRMWARE_VERSION, _prefs.node_name, _prefs.owner_info);
+    snprintf((char *) &reply_data[4], sizeof(reply_data) - 4, "%s\n%s\n%s",
+             FIRMWARE_VERSION, _prefs.node_name, _prefs.owner_info);
     return 4 + strlen((char *) &reply_data[4]);
   }
   return 0; // unknown command
@@ -1171,6 +1172,9 @@ void MyMesh::onDefaultRegionChanged(const RegionEntry* r) {
 
 void MyMesh::formatStatsReply(char *reply) {
   StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
+  const size_t end = strlen(reply) - 1;  // Replace the closing JSON brace.
+  snprintf(reply + end, 157 - end, ",\"tx_quota_drops\":%lu}",
+           (unsigned long)getTxQuotaDrops());
 }
 
 void MyMesh::formatRadioStatsReply(char *reply) {

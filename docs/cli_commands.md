@@ -853,6 +853,35 @@ adverts running, set an explicit value in the 60-240 range.
 
 ---
 
+#### Prioritize a region and reserve transmit airtime (Repeater Only)
+
+- `region prio` shows the preferred region and reservation.
+- `region prio <name> <0-50>` selects one named region and reserves that
+  percentage of both the rolling burst quota and the rolling paced quota.
+  Use zero for the selected region to disable the reservation.
+- `region save` persists the setting.
+
+The region must have a usable transport key and allow floods. The wildcard
+region cannot be selected. Only flood packets with matching transport codes
+qualify. Denying floods for the selected region suspends its reservation.
+
+At a 10% duty cycle with a 50/50 burst split, a 10% reservation sets aside
+18 seconds of burst airtime and 18 seconds of paced airtime per rolling hour.
+The preferred region can use its reservation or the shared portion. Ordinary
+traffic can only use shared airtime. The reserved and shared pacing timers
+are independent, and all transmissions share the same rolling-hour limit.
+
+Once a preferred packet is due, ordinary packets wait until it can send.
+Packets scheduled for later and transmissions already in progress follow
+their usual timing. A packet that can never fit an entire available quota is
+dropped and counted in `stats-core` as `tx_quota_drops`.
+
+The repeater keeps one packet slot available for preferred traffic. When
+the pool is already full, a matching preferred packet can replace a queued
+ordinary packet.
+
+---
+
 #### View or change the home region for this node
 **Usage:** 
 - `region home`

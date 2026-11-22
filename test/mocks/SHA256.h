@@ -1,5 +1,9 @@
 #pragma once
 
+#ifdef MESH_TEST_REAL_CRYPTO
+#include_next <SHA256.h>
+#else
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -33,3 +37,5 @@ public:
   void resetHMAC(const uint8_t* key, size_t keyLen) {}
   void finalizeHMAC(const uint8_t* key, size_t keyLen, uint8_t* hash, size_t hashLen) {}
 };
+
+#endif

@@ -245,6 +245,7 @@ public:
 
 class CommonCLICallbacks {
 public:
+  virtual bool supportsRegionPriority() const { return false; }
   virtual void savePrefs() = 0;
   virtual const char* getFirmwareVer() = 0;
   virtual const char* getBuildDate() = 0;

@@ -7,10 +7,11 @@ class PacketQueue {
   uint8_t* _pri_table;
   uint32_t* _schedule_table;
   int _size, _num;
-  int nextIndex(uint32_t now) const;
 
 public:
   PacketQueue(int max_entries);
+  int nextIndex(uint32_t now, mesh::PacketManager::PacketFilter filter = nullptr,
+                void* context = nullptr) const;
   const mesh::Packet* peek(uint32_t now) const;
   mesh::Packet* get(uint32_t now);
   bool add(mesh::Packet* packet, uint8_t priority, uint32_t scheduled_for);
@@ -34,6 +35,7 @@ public:
   void queueOutbound(mesh::Packet* packet, uint8_t priority, uint32_t scheduled_for) override;
   const mesh::Packet* peekNextOutbound(uint32_t now) const override;
   mesh::Packet* getNextOutbound(uint32_t now) override;
+  int nextOutboundIndex(uint32_t now, PacketFilter filter, void* context) const override;
   int getOutboundCount(uint32_t now) const override;
   int getOutboundTotal() const override;
   int getFreeCount() const override;
@@ -41,4 +43,5 @@ public:
   mesh::Packet* removeOutboundByIdx(int i) override;
   void queueInbound(mesh::Packet* packet, uint32_t scheduled_for) override;
   mesh::Packet* getNextInbound(uint32_t now) override;
+  mesh::Packet* removeLastInbound(PacketFilter filter, void* context) override;
 };

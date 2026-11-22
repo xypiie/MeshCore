@@ -26,7 +26,7 @@ set radio 869.618,62.5,8,8
 set dutycycle 10
 ```
 
-The `ver` command should report `v1.18.0+rflab+txburst_piie` for this build.
+The `ver` command should report `v1.18.0+rflab+txburst+prio_piie` for this build.
 
 For a scoped test, create or select an allowed named region:
 

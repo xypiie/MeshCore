@@ -19,12 +19,13 @@ int PacketQueue::countBefore(uint32_t now) const {
   return n;
 }
 
-int PacketQueue::nextIndex(uint32_t now) const {
+int PacketQueue::nextIndex(uint32_t now, mesh::PacketManager::PacketFilter filter,
+                           void* context) const {
   uint8_t min_pri = 0xFF;
   int best_idx = -1;
   for (int j = 0; j < _num; j++) {
     if ((int32_t)(_schedule_table[j] - now) > 0) continue;   // scheduled for future... ignore for now
-    if (_pri_table[j] < min_pri) {  // select most important priority amongst non-future entries
+    if (_pri_table[j] < min_pri && (!filter || filter(_table[j], context))) {  // select most important priority amongst non-future entries
       min_pri = _pri_table[j];
       best_idx = j;
     }
@@ -100,6 +101,10 @@ mesh::Packet* StaticPoolPacketManager::getNextOutbound(uint32_t now) {
   return send_queue.get(now);
 }
 
+int StaticPoolPacketManager::nextOutboundIndex(uint32_t now, PacketFilter filter, void* context) const {
+  return send_queue.nextIndex(now, filter, context);
+}
+
 int  StaticPoolPacketManager::getOutboundCount(uint32_t now) const {
   return send_queue.countBefore(now);
 }
@@ -128,4 +133,11 @@ void StaticPoolPacketManager::queueInbound(mesh::Packet* packet, uint32_t schedu
 }
 mesh::Packet* StaticPoolPacketManager::getNextInbound(uint32_t now) {
   return rx_queue.get(now);
+}
+
+mesh::Packet* StaticPoolPacketManager::removeLastInbound(PacketFilter filter, void* context) {
+  for (int i = rx_queue.count() - 1; i >= 0; --i) {
+    if (filter(rx_queue.itemAt(i), context)) return rx_queue.removeByIdx(i);
+  }
+  return nullptr;
 }

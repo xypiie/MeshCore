@@ -23,6 +23,8 @@ struct RegionEntry {
 class RegionMap {
   TransportKeyStore* _store;
   uint16_t next_id, home_id, default_id;
+  uint16_t priority_id;
+  uint8_t priority_percent;
   uint16_t num_regions;
   RegionEntry regions[MAX_REGION_ENTRIES];
   RegionEntry wildcard;
@@ -47,9 +49,21 @@ public:
   void setHomeRegion(const RegionEntry* home);
   RegionEntry* getDefaultRegion();   // NOTE: can be NULL
   void setDefaultRegion(const RegionEntry* def);
+  const RegionEntry* getPriorityRegion() const;
+  uint8_t getPriorityPercent() const;
+  uint8_t getConfiguredPriorityPercent() const {
+    return getPriorityRegion() ? priority_percent : 0;
+  }
+  bool setPriorityRegion(const RegionEntry* region, unsigned int percent);
+  bool isPriorityPacket(const mesh::Packet* packet);
   bool removeRegion(const RegionEntry& region);
   bool clear();
-  void resetFrom(const RegionMap& src) { num_regions = 0; next_id = src.next_id; }
+  void resetFrom(const RegionMap& src) {
+    num_regions = 0;
+    next_id = src.next_id;
+    priority_id = src.priority_id;
+    priority_percent = src.priority_percent;
+  }
   int getCount() const { return num_regions; }
   const RegionEntry* getByIdx(int i) const { return &regions[i]; }
   const RegionEntry* getRoot() const { return &wildcard; }

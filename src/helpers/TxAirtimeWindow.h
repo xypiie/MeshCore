@@ -10,9 +10,10 @@ namespace mesh {
 class TxAirtimeWindow {
   static constexpr uint32_t BucketCount = 61;
   struct Bucket {
-    uint32_t total, burst;
+    uint32_t total, burst, reserved, reserved_burst;
   };
   Bucket _buckets[BucketCount]{};
+  uint32_t _reserved_used = 0, _reserved_burst_used = 0;
   uint32_t _bucket_start = 0, _width = 1, _current = 0, _used = 0, _burst_used = 0;
 
 public:
@@ -21,7 +22,7 @@ public:
     _bucket_start = now;
     _width = (window_ms + BucketCount - 2) / (BucketCount - 1);
     if (_width == 0) _width = 1;
-    _current = _used = _burst_used = 0;
+    _current = _used = _burst_used = _reserved_used = _reserved_burst_used = 0;
   }
 
   void advance(uint32_t now) {
@@ -30,28 +31,40 @@ public:
     _bucket_start += steps * _width;
     if (steps >= BucketCount) {
       memset(_buckets, 0, sizeof(_buckets));
-      _current = _used = _burst_used = 0;
+      _current = _used = _burst_used = _reserved_used = _reserved_burst_used = 0;
       return;
     }
     for (uint32_t i = 0; i < steps; ++i) {
       _current = (_current + 1) % BucketCount;
       _used -= _buckets[_current].total;
       _burst_used -= _buckets[_current].burst;
+      _reserved_used -= _buckets[_current].reserved;
+      _reserved_burst_used -= _buckets[_current].reserved_burst;
       _buckets[_current] = {};
     }
   }
 
-  void record(uint32_t duration_ms, bool burst = false) {
+  void record(uint32_t duration_ms, bool burst = false, bool reserved = false) {
     _buckets[_current].total += duration_ms;
     _used += duration_ms;
     if (burst) {
       _buckets[_current].burst += duration_ms;
       _burst_used += duration_ms;
     }
+    if (reserved) {
+      _buckets[_current].reserved += duration_ms;
+      _reserved_used += duration_ms;
+      if (burst) {
+        _buckets[_current].reserved_burst += duration_ms;
+        _reserved_burst_used += duration_ms;
+      }
+    }
   }
 
   uint32_t used() const { return _used; }
   uint32_t burstUsed() const { return _burst_used; }
+  uint32_t reservedUsed() const { return _reserved_used; }
+  uint32_t reservedBurstUsed() const { return _reserved_burst_used; }
 };
 
 }  // namespace mesh

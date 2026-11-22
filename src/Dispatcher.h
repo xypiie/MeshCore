@@ -87,12 +87,14 @@ public:
 */
 class PacketManager {
 public:
+  using PacketFilter = bool (*)(const Packet*, void*);
   virtual Packet* allocNew() = 0;
   virtual void free(Packet* packet) = 0;
 
   virtual void queueOutbound(Packet* packet, uint8_t priority, uint32_t scheduled_for) = 0;
   virtual const Packet* peekNextOutbound(uint32_t now) const = 0;
   virtual Packet* getNextOutbound(uint32_t now) = 0;    // by priority
+  virtual int nextOutboundIndex(uint32_t now, PacketFilter filter, void* context) const = 0;
   virtual int getOutboundCount(uint32_t now) const = 0;
   virtual int getOutboundTotal() const = 0;
   virtual int getFreeCount() const = 0;
@@ -100,6 +102,7 @@ public:
   virtual Packet* removeOutboundByIdx(int i) = 0;
   virtual void queueInbound(Packet* packet, uint32_t scheduled_for) = 0;
   virtual Packet* getNextInbound(uint32_t now) = 0;
+  virtual Packet* removeLastInbound(PacketFilter filter, void* context) = 0;
 };
 
 typedef uint32_t  DispatcherAction;
@@ -132,16 +135,26 @@ class Dispatcher {
   unsigned long duty_cycle_window_ms;
 
   TxAirtimeWindow tx_airtime_window;
-  uint32_t pacing_update_ms = 0, pacing_debt_ms = 0;
+  uint32_t pacing_update_ms = 0, pacing_debt_ms[2]{};
+  uint32_t quota_drop_count = 0;
   uint32_t outbound_airtime_ms = 0, outbound_spacing_ms = 0;
-  bool outbound_is_burst = false;
+  bool outbound_is_burst = false, outbound_is_reserved = false;
 
-  enum class TxAllowance { Blocked, Burst, Paced };
+  enum class TxAllowance { Blocked, Impossible, Burst, Paced };
+  struct TxAdmission {
+    TxAllowance allowance = TxAllowance::Blocked;
+    uint32_t spacing_ms = 0;
+    bool reserved = false;
+  };
 
   void advanceRollingTx(uint32_t now);
   uint32_t rollingTxLimit() const;
-  TxAllowance rollingTxAllowance(uint32_t airtime_ms, int burst_percent,
-                                 uint32_t& spacing_ms) const;
+  TxAdmission rollingTxAllowance(uint32_t airtime_ms, int burst_percent,
+                                  uint8_t reserve_percent, bool preferred) const;
+  static bool preferredPacket(const Packet* packet, void* context);
+  static bool ordinaryPacket(const Packet* packet, void* context);
+  bool keepsReceiveSlot(const Packet* packet);
+  Packet* makeRoomForPreferred(const Packet& incoming);
   void recordRollingTx(uint32_t now, uint32_t elapsed_ms);
 
   void processRecvPacket(Packet* pkt);
@@ -181,6 +194,8 @@ protected:
   virtual float getAirtimeBudgetFactor() const;
   // Negative selects the legacy budget for devices without rolling TX control.
   virtual int getDutyCycleBurstPercent() const { return -1; }
+  virtual uint8_t getPriorityAirtimePercent() const { return 0; }
+  virtual bool isPriorityPacket(const Packet*) { return false; }
   virtual int calcRxDelay(float score, uint32_t air_time) const;
   virtual uint32_t getCADFailRetryDelay() const;
   virtual uint32_t getCADFailMaxDuration() const;
@@ -200,12 +215,13 @@ public:
   unsigned long getTotalAirTime() const { return total_air_time; }
   unsigned long getReceiveAirTime() const {return rx_air_time; }
   unsigned long getRemainingTxBudget() const;
+  uint32_t getTxQuotaDrops() const { return quota_drop_count; }
   uint32_t getNumSentFlood() const { return n_sent_flood; }
   uint32_t getNumSentDirect() const { return n_sent_direct; }
   uint32_t getNumRecvFlood() const { return n_recv_flood; }
   uint32_t getNumRecvDirect() const { return n_recv_direct; }
   void resetStats() {
-    n_sent_flood = n_sent_direct = n_recv_flood = n_recv_direct = 0;
+    n_sent_flood = n_sent_direct = n_recv_flood = n_recv_direct = quota_drop_count = 0;
     _err_flags = 0;
   }
 

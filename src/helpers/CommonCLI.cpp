@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "CommonCLI.h"
+#include "RegionPriorityCLI.h"
 #include "TxtDataHelpers.h"
 #include "AdvertDataHelpers.h"
 #include "TxtDataHelpers.h"
@@ -891,6 +892,8 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
 
   // `region def`: must run before parseTextParts mutates the buffer
   char* cmd = skipSpaces(command);
+  if (RegionPriorityCLI::handle(*_region_map, cmd, reply, 157,
+                                _callbacks->supportsRegionPriority())) return;
   if (strncmp(cmd, "region def", 10) == 0 && (cmd[10] == ' ' || cmd[10] == '\0')) {
     char* payload = skipSpaces(cmd + 10);
     rtrimSpaces(payload);

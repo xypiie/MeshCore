@@ -72,7 +72,7 @@ struct NeighbourInfo {
 #endif
 
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION   "v1.18.0+rflab+txburst_piie"
+  #define FIRMWARE_VERSION   "v1.18.0+rflab+txburst+prio_piie"
 #endif
 
 #define FIRMWARE_ROLE "repeater"
@@ -141,6 +141,12 @@ protected:
   int getDutyCycleBurstPercent() const override {
     return _prefs.duty_cycle_burst <= 100 ? _prefs.duty_cycle_burst :
                                            NodePrefs::DefaultDutyCycleBurst;
+  }
+  uint8_t getPriorityAirtimePercent() const override {
+    return region_map.getPriorityPercent();
+  }
+  bool isPriorityPacket(const mesh::Packet* packet) override {
+    return region_map.isPriorityPacket(packet);
   }
 
   bool allowPacketForward(const mesh::Packet* packet) override;
@@ -230,6 +236,7 @@ public:
   void formatPacketStatsReply(char *reply) override;
   void startRegionsLoad() override;
   bool saveRegions() override;
+  bool supportsRegionPriority() const override { return true; }
   void onDefaultRegionChanged(const RegionEntry* r) override;
 
   mesh::LocalIdentity& getSelfId() override { return self_id; }

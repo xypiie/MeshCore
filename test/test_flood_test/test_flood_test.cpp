@@ -67,8 +67,15 @@ public:
   uint32_t fixed_airtime_ms = 50;
   std::vector<uint32_t> starts;
   std::vector<mesh::Packet> frames;
+  std::vector<uint8_t> incoming;
   explicit Radio(Clock& value) : clock(value) { }
-  int recvRaw(uint8_t*, int) override { return 0; }
+  int recvRaw(uint8_t* bytes, int capacity) override {
+    const int length = incoming.size();
+    if (!length || length > capacity) return 0;
+    memcpy(bytes, incoming.data(), length);
+    incoming.clear();
+    return length;
+  }
   uint32_t getEstAirtimeFor(int len) override {
     return airtime_by_length ? len : fixed_airtime_ms;
   }
@@ -93,7 +100,14 @@ public:
 class Dispatcher : public mesh::Dispatcher {
   FloodTest& job;
 protected:
-  mesh::DispatcherAction onRecvPacket(mesh::Packet*) override { return ACTION_RELEASE; }
+  mesh::DispatcherAction onRecvPacket(mesh::Packet*) override {
+    return forward_received ? ACTION_RETRANSMIT(1) : ACTION_RELEASE;
+  }
+  uint8_t getPriorityAirtimePercent() const override { return reserve; }
+  bool isPriorityPacket(const mesh::Packet* packet) override {
+    return packet->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD &&
+           packet->transport_codes[0] == 0xBEEF;
+  }
   void logTx(mesh::Packet* packet, int) override { job.finished(packet, true, _ms->getMillis(), _radio->getEstAirtimeFor(packet->getRawLength())); }
   void logTxFail(mesh::Packet* packet, int) override { job.finished(packet, false, _ms->getMillis()); }
   float getAirtimeBudgetFactor() const override { return factor; }
@@ -102,6 +116,8 @@ protected:
 public:
   float factor = 1;
   int burst = -1;
+  uint8_t reserve = 0;
+  bool forward_received = false;
   uint32_t window = 3600000;
   Dispatcher(Radio& radio, Clock& clock, StaticPoolPacketManager& packets, FloodTest& flood)
     : mesh::Dispatcher(radio, clock, packets), job(flood) { }
@@ -131,6 +147,29 @@ protected:
     job.queued(packet);
     dispatcher.sendPacket(packet, 1);
   }
+  mesh::Packet frame(bool preferred, uint16_t length) {
+    mesh::Packet packet{};
+    packet.header = (preferred ? ROUTE_TYPE_TRANSPORT_FLOOD : ROUTE_TYPE_FLOOD) |
+                    (PAYLOAD_TYPE_RAW_CUSTOM << PH_TYPE_SHIFT);
+    packet.setPathHashSizeAndCount(1, 0);
+    packet.payload_len = length - packet.getRawLength();
+    if (preferred) packet.transport_codes[0] = 0xBEEF;
+    return packet;
+  }
+
+  void queueFrame(bool preferred, uint16_t length, uint32_t delay = 0, uint8_t priority = 1) {
+    auto packet = dispatcher.obtainNewPacket();
+    ASSERT_NE(nullptr, packet);
+    *packet = frame(preferred, length);
+    dispatcher.sendPacket(packet, priority, delay);
+  }
+
+  void receiveFrame(bool preferred) {
+    auto packet = frame(preferred, 50);
+    radio.incoming.resize(50);
+    ASSERT_EQ(50u, packet.writeTo(radio.incoming.data()));
+  }
+
   void advance(uint32_t duration, uint32_t step = 1) {
     for (uint32_t i = 0; i < duration; i += step) {
       clock.now += step;
@@ -398,6 +437,125 @@ TEST_F(FloodProducer, HalfBurstSpends180SecondsThenPacesTheRemaining57Minutes) {
   advance(180000, 10);
   // As old burst packets expire, their separate quota can be used again.
   EXPECT_GT(radio.starts.size() - before_expiry, 100u);
+}
+
+TEST_F(FloodProducer, DuePreferredFrameBlocksASmallerOrdinaryFrame) {
+  radio.airtime_by_length = true;
+  dispatcher.factor = 9;
+  dispatcher.window = 6000;
+  dispatcher.burst = 100;
+  dispatcher.reserve = 10;  // 60 ms reserved, 540 ms shared.
+  dispatcher.begin();
+  queueFrame(false, 180);
+  queueFrame(false, 180);
+  queueFrame(false, 150);
+  advance(550);
+  ASSERT_EQ(3u, radio.frames.size());  // 510 ms spent, 30 ms shared left.
+
+  queueFrame(true, 100);
+  queueFrame(false, 20, 0, 0);
+  advance(5000);
+  EXPECT_EQ(3u, radio.frames.size());
+  EXPECT_EQ(2, packets.getOutboundTotal());
+
+  advance(1000);
+  ASSERT_GE(radio.frames.size(), 4u);
+  EXPECT_EQ(ROUTE_TYPE_TRANSPORT_FLOOD, radio.frames[3].getRouteType());
+}
+
+TEST_F(FloodProducer, FuturePreferredFrameDoesNotBlockAnOrdinaryFrame) {
+  dispatcher.burst = 100;
+  dispatcher.reserve = 10;
+  dispatcher.begin();
+  queueFrame(true, 50, 200);
+  queueFrame(false, 50);
+  advance(300);
+  ASSERT_EQ(2u, radio.frames.size());
+  EXPECT_EQ(ROUTE_TYPE_FLOOD, radio.frames[0].getRouteType());
+  EXPECT_EQ(ROUTE_TYPE_TRANSPORT_FLOOD, radio.frames[1].getRouteType());
+}
+
+TEST_F(FloodProducer, OrdinaryTrafficCannotSpendReservedBurstAirtime) {
+  radio.airtime_by_length = true;
+  dispatcher.factor = 9;
+  dispatcher.burst = 100;
+  dispatcher.reserve = 50;
+  dispatcher.window = 6000;
+  dispatcher.begin();
+  queueFrame(false, 180);
+  queueFrame(false, 150);
+  advance(200);
+  ASSERT_EQ(1u, radio.frames.size());
+  queueFrame(true, 180);
+  advance(200);
+  ASSERT_EQ(2u, radio.frames.size());
+  EXPECT_EQ(ROUTE_TYPE_TRANSPORT_FLOOD, radio.frames.back().getRouteType());
+  EXPECT_EQ(1, packets.getOutboundTotal());
+}
+
+TEST_F(FloodProducer, OrdinaryTrafficCannotDelayTheReservedPacer) {
+  dispatcher.factor = 9;
+  dispatcher.burst = 0;
+  dispatcher.reserve = 50;
+  dispatcher.begin();
+  queueFrame(false, 50);
+  advance(60);
+  queueFrame(true, 50);
+  queueFrame(false, 50);
+  advance(100);
+  ASSERT_EQ(2u, radio.frames.size());
+  EXPECT_EQ(ROUTE_TYPE_TRANSPORT_FLOOD, radio.frames.back().getRouteType());
+  EXPECT_LT(radio.starts[1] - radio.starts[0], 100u);
+  EXPECT_EQ(1, packets.getOutboundTotal());
+}
+
+TEST_F(FloodProducer, ImpossiblePreferredFrameIsCountedAndUnblocksOrdinaryTraffic) {
+  radio.airtime_by_length = true;
+  dispatcher.factor = 9;
+  dispatcher.burst = 50;
+  dispatcher.reserve = 50;
+  dispatcher.window = 2000;  // A frame can use at most one of four 50 ms quotas.
+  dispatcher.begin();
+  queueFrame(true, 60);
+  queueFrame(false, 40);
+  advance(50);
+  EXPECT_EQ(1u, dispatcher.getTxQuotaDrops());
+  ASSERT_EQ(1u, radio.frames.size());
+  EXPECT_EQ(ROUTE_TYPE_FLOOD, radio.frames.front().getRouteType());
+}
+
+TEST_F(FloodProducer, PreferredReceiveCanDisplaceOrdinaryTrafficWhenPoolIsFull) {
+  radio.busy = true;
+  dispatcher.burst = 100;
+  dispatcher.forward_received = true;
+  dispatcher.begin();
+  for (int i = 0; i < 32; ++i) queueFrame(false, 50);
+  ASSERT_EQ(0, packets.getFreeCount());
+  dispatcher.reserve = 10;
+  receiveFrame(false);
+  advance(1);
+  ASSERT_EQ(32, packets.getOutboundTotal());
+  receiveFrame(true);
+  advance(1);
+  ASSERT_EQ(32, packets.getOutboundTotal());
+  EXPECT_EQ(ROUTE_TYPE_TRANSPORT_FLOOD, packets.getOutboundByIdx(31)->getRouteType());
+}
+
+TEST_F(FloodProducer, OrdinaryPacketsLeaveOneReceiveSlotFree) {
+  radio.busy = true;
+  dispatcher.burst = 100;
+  dispatcher.reserve = 10;
+  dispatcher.forward_received = true;
+  dispatcher.begin();
+  for (int i = 0; i < 32; ++i) queueFrame(false, 50);
+  ASSERT_EQ(1, packets.getFreeCount());
+  receiveFrame(false);
+  advance(1);
+  ASSERT_EQ(1, packets.getFreeCount());
+  receiveFrame(true);
+  advance(1);
+  EXPECT_EQ(0, packets.getFreeCount());
+  EXPECT_EQ(ROUTE_TYPE_TRANSPORT_FLOOD, packets.getOutboundByIdx(31)->getRouteType());
 }
 
 TEST(TxAirtimeWindow, KeepsTheOldestOverlappingBucketAcrossMillisWrap) {

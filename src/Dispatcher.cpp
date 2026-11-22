@@ -25,7 +25,7 @@ void Dispatcher::begin() {
   float duty_cycle = 1.0f / (1.0f + getAirtimeBudgetFactor());
   tx_budget_ms = (unsigned long)(duty_cycle_window_ms * duty_cycle);
   pacing_update_ms = _ms->getMillis();
-  pacing_debt_ms = 0;
+  pacing_debt_ms[0] = pacing_debt_ms[1] = quota_drop_count = 0;
   tx_airtime_window.begin(pacing_update_ms, duty_cycle_window_ms);
   last_budget_update = _ms->getMillis();
 
@@ -57,7 +57,7 @@ void Dispatcher::updateTxBudget() {
 void Dispatcher::advanceRollingTx(uint32_t now) {
   tx_airtime_window.advance(now);
   const uint32_t elapsed = now - pacing_update_ms;
-  pacing_debt_ms = elapsed >= pacing_debt_ms ? 0 : pacing_debt_ms - elapsed;
+  for (auto& debt : pacing_debt_ms) debt = elapsed >= debt ? 0 : debt - elapsed;
   pacing_update_ms = now;
 }
 
@@ -73,39 +73,99 @@ unsigned long Dispatcher::getRemainingTxBudget() const {
   return used < limit ? limit - used : 0;
 }
 
-Dispatcher::TxAllowance Dispatcher::rollingTxAllowance(uint32_t airtime_ms, int burst_percent,
-                                                       uint32_t& spacing_ms) const {
-  if (getAirtimeBudgetFactor() == 0) return TxAllowance::Burst;  // Unrestricted TX.
+Dispatcher::TxAdmission Dispatcher::rollingTxAllowance(uint32_t airtime_ms, int burst_percent,
+                                                       uint8_t reserve_percent, bool preferred) const {
+  TxAdmission result;
+  if (getAirtimeBudgetFactor() == 0) {
+    result.allowance = TxAllowance::Burst;
+    return result;
+  }
   const uint32_t limit = rollingTxLimit();
-  const uint32_t used = tx_airtime_window.used();
-  if (!limit || used >= limit || airtime_ms > limit - used) return TxAllowance::Blocked;
-
   const uint32_t burst_limit = (uint64_t)limit * burst_percent / 100;
   const uint32_t paced_limit = limit - burst_limit;
-  const uint32_t burst_used = tx_airtime_window.burstUsed();
-  const bool fits_burst = burst_used < burst_limit && airtime_ms <= burst_limit - burst_used;
-  const uint32_t paced_used = used - burst_used;
-  const bool fits_paced = pacing_debt_ms == 0 && paced_used < paced_limit &&
-                         airtime_ms <= paced_limit - paced_used;
-  if (!fits_burst && !fits_paced) return TxAllowance::Blocked;
+  const uint32_t reserved_burst = (uint64_t)burst_limit * reserve_percent / 100;
+  const uint32_t reserved_paced = (uint64_t)paced_limit * reserve_percent / 100;
 
-  if (paced_limit) {
-    // Spread the paced quota over the time left after a contiguous full burst.
-    const uint64_t paced_time = duty_cycle_window_ms - burst_limit;
-    const uint64_t spacing = (airtime_ms * paced_time + paced_limit - 1) / paced_limit;
-    spacing_ms = spacing > UINT32_MAX ? UINT32_MAX : spacing;
+  const uint32_t used = tx_airtime_window.used();
+  const uint32_t burst_used = tx_airtime_window.burstUsed();
+  const uint32_t paced_used = used - burst_used;
+  const uint32_t reserved_burst_used = tx_airtime_window.reservedBurstUsed();
+  const uint32_t reserved_paced_used = tx_airtime_window.reservedUsed() - reserved_burst_used;
+
+  // A packet uses one quota. Check the reservation first, then the shared
+  // quota. The aggregate limits also apply across configuration changes.
+  bool can_ever_fit = false;
+  for (int reserved = preferred && reserve_percent ? 1 : 0; reserved >= 0; --reserved) {
+    const uint32_t burst_cap = reserved ? reserved_burst : burst_limit - reserved_burst;
+    const uint32_t paced_cap = reserved ? reserved_paced : paced_limit - reserved_paced;
+    const uint32_t lane_burst_used = reserved ? reserved_burst_used :
+                                    reserve_percent ? burst_used - reserved_burst_used : burst_used;
+    const uint32_t lane_paced_used = reserved ? reserved_paced_used :
+                                    reserve_percent ? paced_used - reserved_paced_used : paced_used;
+    can_ever_fit |= (burst_cap && airtime_ms <= burst_cap) ||
+                    (paced_cap && airtime_ms <= paced_cap);
+    if (used >= limit || airtime_ms > limit - used) continue;
+
+    const bool fits_burst = lane_burst_used < burst_cap &&
+                            airtime_ms <= burst_cap - lane_burst_used &&
+                            burst_used < burst_limit && airtime_ms <= burst_limit - burst_used;
+    const uint32_t debt = reserve_percent ? pacing_debt_ms[reserved] :
+                          (pacing_debt_ms[0] > pacing_debt_ms[1] ?
+                           pacing_debt_ms[0] : pacing_debt_ms[1]);
+    const bool fits_paced = debt == 0 && lane_paced_used < paced_cap &&
+                            airtime_ms <= paced_cap - lane_paced_used &&
+                            paced_used < paced_limit && airtime_ms <= paced_limit - paced_used;
+    if (!fits_burst && !fits_paced) continue;
+
+    result.allowance = fits_burst ? TxAllowance::Burst : TxAllowance::Paced;
+    result.reserved = reserved != 0;
+    if (paced_cap) {
+      const uint64_t paced_time = duty_cycle_window_ms - burst_limit;
+      const uint64_t spacing = (airtime_ms * paced_time + paced_cap - 1) / paced_cap;
+      result.spacing_ms = spacing > UINT32_MAX ? UINT32_MAX : spacing;
+    }
+    return result;
   }
-  return fits_burst ? TxAllowance::Burst : TxAllowance::Paced;
+  result.allowance = can_ever_fit ? TxAllowance::Blocked : TxAllowance::Impossible;
+  return result;
 }
 
 void Dispatcher::recordRollingTx(uint32_t now, uint32_t elapsed_ms) {
   advanceRollingTx(now);
   const uint32_t charged = elapsed_ms > outbound_airtime_ms ? elapsed_ms : outbound_airtime_ms;
-  tx_airtime_window.record(charged, outbound_is_burst);
+  tx_airtime_window.record(charged, outbound_is_burst, outbound_is_reserved);
 
-  // A burst packet may bypass the pacer. Its spacing still applies when the
-  // next packet needs the paced quota, so it cannot extend the continuous burst.
-  pacing_debt_ms = outbound_spacing_ms > elapsed_ms ? outbound_spacing_ms - elapsed_ms : 0;
+  // A burst can bypass its lane's pacer. The next paced transmission in
+  // that lane still waits, and the other lane's pacing is independent.
+  pacing_debt_ms[outbound_is_reserved] =
+      outbound_spacing_ms > elapsed_ms ? outbound_spacing_ms - elapsed_ms : 0;
+}
+
+bool Dispatcher::preferredPacket(const Packet* packet, void* context) {
+  return static_cast<Dispatcher*>(context)->isPriorityPacket(packet);
+}
+
+bool Dispatcher::ordinaryPacket(const Packet* packet, void* context) {
+  return !preferredPacket(packet, context);
+}
+
+bool Dispatcher::keepsReceiveSlot(const Packet* packet) {
+  return getPriorityAirtimePercent() == 0 || _mgr->getFreeCount() > 0 ||
+         isPriorityPacket(packet);
+}
+
+Packet* Dispatcher::makeRoomForPreferred(const Packet& incoming) {
+  if (!isPriorityPacket(&incoming)) return nullptr;
+  for (int i = _mgr->getOutboundTotal() - 1; i >= 0; --i) {
+    if (isPriorityPacket(_mgr->getOutboundByIdx(i))) continue;
+    Packet* slot = _mgr->removeOutboundByIdx(i);
+    logTxFail(slot, slot->getRawLength());
+    *slot = incoming;
+    return slot;
+  }
+  Packet* slot = _mgr->removeLastInbound(ordinaryPacket, this);
+  if (slot) *slot = incoming;
+  return slot;
 }
 
 int Dispatcher::calcRxDelay(float score, uint32_t air_time) const {
@@ -266,18 +326,24 @@ void Dispatcher::checkRecv() {
       logRxRaw(_radio->getLastSNR(), _radio->getLastRSSI(), raw, len);
 
       pkt = _mgr->allocNew();
-      if (pkt == NULL) {
-        MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): WARNING: received data, no unused packets available!", getLogDateTime());
-      } else {
-        if (tryParsePacket(pkt, raw, len)) {
-          pkt->_snr = _radio->getLastSNR() * 4.0f;
-          score = _radio->packetScore(_radio->getLastSNR(), len);
-          air_time = _radio->getEstAirtimeFor(len);
-          rx_air_time += air_time;
-        } else {
-          _mgr->free(pkt);  // put back into pool
-          pkt = NULL;
+      bool parsed = false;
+      if (!pkt && getPriorityAirtimePercent() > 0) {
+        Packet incoming{};
+        if (tryParsePacket(&incoming, raw, len)) {
+          pkt = makeRoomForPreferred(incoming);
+          parsed = pkt != nullptr;
         }
+      }
+      if (!pkt) {
+        MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): WARNING: received data, no unused packets available!", getLogDateTime());
+      } else if ((parsed || tryParsePacket(pkt, raw, len)) && keepsReceiveSlot(pkt)) {
+        pkt->_snr = _radio->getLastSNR() * 4.0f;
+        score = _radio->packetScore(_radio->getLastSNR(), len);
+        air_time = _radio->getEstAirtimeFor(len);
+        rx_air_time += air_time;
+      } else {
+        _mgr->free(pkt);
+        pkt = NULL;
       }
     } else {
       pkt = NULL;
@@ -326,6 +392,10 @@ void Dispatcher::checkRecv() {
 }
 
 void Dispatcher::processRecvPacket(Packet* pkt) {
+  if (!keepsReceiveSlot(pkt)) {
+    _mgr->free(pkt);
+    return;
+  }
   DispatcherAction action = onRecvPacket(pkt);
   if (action == ACTION_RELEASE) {
     _mgr->free(pkt);
@@ -341,23 +411,37 @@ void Dispatcher::processRecvPacket(Packet* pkt) {
 
 void Dispatcher::checkSend() {
   const uint32_t now = _ms->getMillis();
-  const Packet* next = _mgr->peekNextOutbound(now);
-  if (!next) return;
-
   const int burst_percent = getDutyCycleBurstPercent();
+  const uint8_t reserve = burst_percent >= 0 ? getPriorityAirtimePercent() : 0;
+  if (reserve && !millisHasNowPassed(next_tx_time)) return;
+  int next_index = reserve ? _mgr->nextOutboundIndex(now, preferredPacket, this) : -1;
+  const bool preferred = next_index >= 0;
+  if (!preferred) next_index = _mgr->nextOutboundIndex(now, nullptr, nullptr);
+  if (next_index < 0) return;
+  const Packet* next = _mgr->getOutboundByIdx(next_index);
   if (burst_percent < 0) updateTxBudget();
   if (!millisHasNowPassed(next_tx_time)) return;
 
   const int frame_len = next->getRawLength();
   // Let the existing validation discard oversized frames without estimating airtime.
   const uint32_t est_airtime = frame_len <= MAX_TRANS_UNIT ? _radio->getEstAirtimeFor(frame_len) : 0;
-  uint32_t spacing_ms = 0;
-  TxAllowance allowance = TxAllowance::Blocked;
+  TxAdmission admission;
   if (burst_percent < 0) {
     if (tx_budget_ms < est_airtime) return;
   } else if (frame_len <= MAX_TRANS_UNIT) {
-    allowance = rollingTxAllowance(est_airtime, burst_percent, spacing_ms);
-    if (allowance == TxAllowance::Blocked) return;
+    admission = rollingTxAllowance(est_airtime, burst_percent, reserve, preferred);
+    if (admission.allowance == TxAllowance::Blocked) {
+      // Limit repeated scope validation while the ready queue cannot transmit.
+      if (reserve) next_tx_time = futureMillis(10);
+      return;
+    }
+    if (admission.allowance == TxAllowance::Impossible) {
+      Packet* dropped = _mgr->removeOutboundByIdx(next_index);
+      ++quota_drop_count;
+      logTxFail(dropped, frame_len);
+      _mgr->free(dropped);
+      return;
+    }
   }
 
   if (_radio->isReceiving()) {
@@ -378,7 +462,7 @@ void Dispatcher::checkSend() {
   }
   cad_busy_start = 0;  // reset busy state
 
-  outbound = _mgr->getNextOutbound(now);
+  outbound = _mgr->removeOutboundByIdx(next_index);
   if (outbound) {
     int len = 0;
     uint8_t raw[MAX_TRANS_UNIT];
@@ -411,8 +495,9 @@ void Dispatcher::checkSend() {
         return;
       }
       outbound_airtime_ms = est_airtime;
-      outbound_spacing_ms = spacing_ms;
-      outbound_is_burst = allowance == TxAllowance::Burst;
+      outbound_spacing_ms = admission.spacing_ms;
+      outbound_is_burst = admission.allowance == TxAllowance::Burst;
+      outbound_is_reserved = admission.reserved;
       outbound_expiry = futureMillis(max_airtime);
 
     #if MESH_PACKET_LOGGING
@@ -448,6 +533,9 @@ void Dispatcher::releasePacket(Packet* packet) {
 void Dispatcher::sendPacket(Packet* packet, uint8_t priority, uint32_t delay_millis) {
   if (!Packet::isValidPathLen(packet->path_len) || packet->payload_len > MAX_PACKET_PAYLOAD) {
     MESH_DEBUG_PRINTLN("%s Dispatcher::sendPacket(): ERROR: invalid packet... path_len=%d, payload_len=%d", getLogDateTime(), (uint32_t) packet->path_len, (uint32_t) packet->payload_len);
+    _mgr->free(packet);
+  } else if (!keepsReceiveSlot(packet)) {
+    logTxFail(packet, packet->getRawLength());
     _mgr->free(packet);
   } else {
     _mgr->queueOutbound(packet, priority, futureMillis(delay_millis));
