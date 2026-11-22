@@ -10,7 +10,6 @@ namespace mesh {
 
 #define MAX_RX_DELAY_MILLIS        32000  // 32 seconds
 #define MIN_TX_BUDGET_RESERVE_MS   100    // min budget (ms) required before allowing next TX
-#define MIN_TX_BUDGET_AIRTIME_DIV  2      // require at least 1/N of estimated airtime as budget before TX
 
 #ifndef NOISE_FLOOR_CALIB_INTERVAL
   #define NOISE_FLOOR_CALIB_INTERVAL   2000     // 2 seconds
@@ -273,19 +272,18 @@ void Dispatcher::processRecvPacket(Packet* pkt) {
 }
 
 void Dispatcher::checkSend() {
-  if (_mgr->getOutboundCount(_ms->getMillis()) == 0) return;
-  
+  const uint32_t now = _ms->getMillis();
+  const Packet* next = _mgr->peekNextOutbound(now);
+  if (!next) return;
+
   updateTxBudget();
-  
-  uint32_t est_airtime = _radio->getEstAirtimeFor(MAX_TRANS_UNIT);
-  if (tx_budget_ms < est_airtime / MIN_TX_BUDGET_AIRTIME_DIV) {
-    float duty_cycle = 1.0f / (1.0f + getAirtimeBudgetFactor());
-    unsigned long needed = est_airtime / MIN_TX_BUDGET_AIRTIME_DIV - tx_budget_ms;
-    next_tx_time = futureMillis((unsigned long)(needed / duty_cycle));
-    return;
-  }
-  
   if (!millisHasNowPassed(next_tx_time)) return;
+
+  const int frame_len = next->getRawLength();
+  // Let the existing validation discard oversized frames without estimating airtime.
+  const uint32_t est_airtime = frame_len <= MAX_TRANS_UNIT ? _radio->getEstAirtimeFor(frame_len) : 0;
+  if (tx_budget_ms < est_airtime) return;
+
   if (_radio->isReceiving()) {
     if (cad_busy_start == 0) {
       cad_busy_start = _ms->getMillis();   // record when CAD busy state started
@@ -304,7 +302,7 @@ void Dispatcher::checkSend() {
   }
   cad_busy_start = 0;  // reset busy state
 
-  outbound = _mgr->getNextOutbound(_ms->getMillis());
+  outbound = _mgr->getNextOutbound(now);
   if (outbound) {
     int len = 0;
     uint8_t raw[MAX_TRANS_UNIT];
@@ -324,7 +322,7 @@ void Dispatcher::checkSend() {
     } else {
       memcpy(&raw[len], outbound->payload, outbound->payload_len); len += outbound->payload_len;
 
-      uint32_t max_airtime = _radio->getEstAirtimeFor(len)*3/2;
+      uint32_t max_airtime = est_airtime * 3 / 2;
       outbound_start = _ms->getMillis();
       bool success = _radio->startSendRaw(raw, len);
       if (!success) {

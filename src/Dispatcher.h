@@ -90,6 +90,7 @@ public:
   virtual void free(Packet* packet) = 0;
 
   virtual void queueOutbound(Packet* packet, uint8_t priority, uint32_t scheduled_for) = 0;
+  virtual const Packet* peekNextOutbound(uint32_t now) const = 0;
   virtual Packet* getNextOutbound(uint32_t now) = 0;    // by priority
   virtual int getOutboundCount(uint32_t now) const = 0;
   virtual int getOutboundTotal() const = 0;

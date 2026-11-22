@@ -1297,7 +1297,7 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
 void MyMesh::printFloodTestWarning() {
   Serial.println("LAB RF TEST: use shielding for extended runs; check preceding-hour airtime.");
   Serial.println("After the last TX, take the repeater offline for 60 minutes.");
-  Serial.println("The operator is responsible for legal operation; this is the original limiter.");
+  Serial.println("The operator is responsible for legal operation; this test uses the TX budget.");
 }
 
 bool MyMesh::handleFloodTestCommand(uint32_t timestamp, const char* command, char* reply) {

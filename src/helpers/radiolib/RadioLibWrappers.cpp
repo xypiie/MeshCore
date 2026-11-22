@@ -160,7 +160,7 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
 }
 
 uint32_t RadioLibWrapper::getEstAirtimeFor(int len_bytes) {
-  return _radio->getTimeOnAir(len_bytes) / 1000;
+  return (_radio->getTimeOnAir(len_bytes) + 999) / 1000;
 }
 
 bool RadioLibWrapper::startSendRaw(const uint8_t* bytes, int len) {

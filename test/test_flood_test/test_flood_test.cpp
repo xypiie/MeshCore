@@ -58,14 +58,16 @@ public:
 class Radio : public mesh::Radio {
   Clock& clock;
   uint32_t start = 0;
+  uint32_t airtime = 0;
   bool sending = false;
 public:
   bool busy = false, succeeds = true, completes = true;
+  bool airtime_by_length = false;
   std::vector<uint32_t> starts;
   std::vector<mesh::Packet> frames;
   explicit Radio(Clock& value) : clock(value) { }
   int recvRaw(uint8_t*, int) override { return 0; }
-  uint32_t getEstAirtimeFor(int) override { return 50; }
+  uint32_t getEstAirtimeFor(int len) override { return airtime_by_length ? len : 50; }
   float packetScore(float, int) override { return 1; }
   bool isInRecvMode() const override { return !sending; }
   bool isReceiving() override { return busy; }
@@ -76,10 +78,11 @@ public:
     frames.push_back(packet);
     starts.push_back(clock.now);
     start = clock.now;
+    airtime = getEstAirtimeFor(length);
     sending = true;
     return true;
   }
-  bool isSendComplete() override { return sending && completes && clock.now - start >= 50; }
+  bool isSendComplete() override { return sending && completes && clock.now - start >= airtime; }
   void onSendFinished() override { sending = false; }
 };
 
@@ -225,6 +228,48 @@ TEST_F(FloodProducer, OriginalBudgetRemainsInControlAndIsNotResetByStartingAJob)
   EXPECT_GT(job.sent(), 0u);
   EXPECT_LT(job.sent(), 30u);
   EXPECT_FALSE(job.busy());
+}
+
+TEST_F(FloodProducer, WaitsForTheFullAirtimeOfTheQueuedFrame) {
+  radio.airtime_by_length = true;
+  dispatcher.factor = 9;
+  dispatcher.window = 2000;  // A full bucket holds 200 ms in this test.
+  dispatcher.begin();
+  ASSERT_TRUE(job.start(clock.now, 5, 1));
+  advance(1700);
+
+  ASSERT_EQ(1u, radio.starts.size());
+  EXPECT_EQ(1, packets.getOutboundTotal());
+  EXPECT_EQ(190, radio.frames.front().getRawLength());
+
+  advance(400);
+  ASSERT_EQ(2u, radio.starts.size());
+  // The first 190 ms frame leaves 10 ms. Refilling the missing 180 ms
+  // requires 1800 ms of silence at 10%.
+  EXPECT_GE(radio.starts[1] - radio.starts[0], 1990u);
+  EXPECT_LE(radio.starts[1] - radio.starts[0], 1992u);
+}
+
+TEST_F(FloodProducer, AdmitsAShortFrameUsingItsOwnAirtime) {
+  radio.airtime_by_length = true;
+  dispatcher.factor = 9;
+  dispatcher.window = 1000;  // A full bucket holds less than half a max-size frame.
+  dispatcher.begin();
+  ASSERT_TRUE(job.start(clock.now, 1, 1));
+  queue();  // Queue a long, lower-priority frame before the short one.
+
+  auto packet = dispatcher.obtainNewPacket();
+  ASSERT_NE(nullptr, packet);
+  packet->header = ROUTE_TYPE_DIRECT | (PAYLOAD_TYPE_ACK << PH_TYPE_SHIFT);
+  packet->setPathHashSizeAndCount(1, 0);
+  packet->payload_len = 4;
+  memset(packet->payload, 0, 4);
+  dispatcher.sendPacket(packet, 0);
+
+  advance(20);
+  ASSERT_EQ(1u, radio.frames.size());
+  EXPECT_EQ(PAYLOAD_TYPE_ACK, radio.frames.front().getPayloadType());
+  EXPECT_EQ(1, packets.getOutboundTotal());
 }
 
 TEST_F(FloodProducer, FailedStartsAndTimeoutsReleaseTheOutstandingFrame) {

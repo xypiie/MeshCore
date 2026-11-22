@@ -2,8 +2,9 @@
 
 This experiment is based on MeshCore **81dbae59** and targets an attended
 Heltec V3 repeater in an RF shielded lab. It adds a local-terminal traffic producer and the
-[MC-Dutycycle Flipper app](../tools/flipper-dutycycle/README.md). The original
-dispatcher, airtime budget, and duty-cycle calculations are unchanged.
+[MC-Dutycycle Flipper app](../tools/flipper-dutycycle/README.md).
+Commit `c03a16dc` used the original packet admission threshold. The dispatcher
+now requires enough credit for the next packet's estimated airtime.
 
 ## Repeater
 
@@ -75,7 +76,7 @@ routes; flood-route raw-custom frames are released without relaying. The test
 therefore sends scoped or unscoped frames without being repeated by upstream
 peers with that behavior. No changes to receiver/forwarding code are required.
 
-Use the shielded setup for the two-hour experiment. The original budget can
+Use the shielded setup for the two-hour experiment. The starting budget can
 allow more than 10% in a rolling hour even when configured at 10%. Other repeater
 traffic, including adverts, can also contribute to the RF trace and consume
 budget.
@@ -115,13 +116,13 @@ second capture hours and the busiest complete rolling 60-minute window.
 The Flipper measures energy above the threshold at 869.618 MHz. Other signals
 in its receive channel will contribute to the result.
 
-Native producer tests exercise the original dispatcher with a simulated radio:
+Native producer tests exercise the dispatcher with a simulated radio:
 
 ```sh
 pio test -e native -f test_flood_test
 ```
 
 These tests cover command limits, remote rejection, deadline cancellation,
-one outstanding packet, preserving other queue entries, original-budget
-behavior, failed transmissions, and clock wrap. Actual RF behavior requires
+one outstanding packet, preserving other queue entries, packet airtime
+admission, failed transmissions, and clock wrap. Actual RF behavior requires
 validation with the attended hardware setup.

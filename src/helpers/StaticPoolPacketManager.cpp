@@ -19,7 +19,7 @@ int PacketQueue::countBefore(uint32_t now) const {
   return n;
 }
 
-mesh::Packet* PacketQueue::get(uint32_t now) {
+int PacketQueue::nextIndex(uint32_t now) const {
   uint8_t min_pri = 0xFF;
   int best_idx = -1;
   for (int j = 0; j < _num; j++) {
@@ -29,18 +29,15 @@ mesh::Packet* PacketQueue::get(uint32_t now) {
       best_idx = j;
     }
   }
-  if (best_idx < 0) return NULL;   // empty, or all items are still in the future
+  return best_idx;
+}
 
-  mesh::Packet* top = _table[best_idx];
-  int i = best_idx;
-  _num--;
-  while (i < _num) {
-    _table[i] = _table[i+1];
-    _pri_table[i] = _pri_table[i+1];
-    _schedule_table[i] = _schedule_table[i+1];
-    i++;
-  }
-  return top;
+const mesh::Packet* PacketQueue::peek(uint32_t now) const {
+  return itemAt(nextIndex(now));
+}
+
+mesh::Packet* PacketQueue::get(uint32_t now) {
+  return removeByIdx(nextIndex(now));
 }
 
 mesh::Packet* PacketQueue::removeByIdx(int i) {
@@ -92,6 +89,10 @@ void StaticPoolPacketManager::queueOutbound(mesh::Packet* packet, uint8_t priori
     MESH_DEBUG_PRINTLN("queueOutbound: send queue full, dropping packet");
     free(packet);
   }
+}
+
+const mesh::Packet* StaticPoolPacketManager::peekNextOutbound(uint32_t now) const {
+  return send_queue.peek(now);
 }
 
 mesh::Packet* StaticPoolPacketManager::getNextOutbound(uint32_t now) {
