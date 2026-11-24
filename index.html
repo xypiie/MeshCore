@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshCore repeater airtime lab</title>
+<style>
+* {box-sizing:border-box}
+body {margin:0;background:#edf2f5;color:#172d3c;font:16px/1.55 system-ui,sans-serif}
+main {max-width:58rem;margin:auto;padding:clamp(1rem,4vw,3rem)}
+section {background:white;border:1px solid #d9e2e8;border-radius:.85rem;padding:1.25rem 1.5rem;margin:1rem 0}
+h1,h2,p {margin:0 0 .45em}
+h1 {font-size:clamp(1.8rem,4vw,2.6rem);line-height:1.15}
+h2 {font-size:1.25rem}
+a {color:#075c76;text-underline-offset:.15em}
+</style>
+</head>
+<body><main>
+<h1>MeshCore repeater airtime lab</h1>
+<p>Measured RF airtime before and after the rolling limiter and region-priority changes.</p>
+<section>
+<h2>Repeater airtime</h2>
+<p>Compare the original firmware with the rolling limiter using two-hour captures.</p>
+<p><a href="analysis.html">Analysis report</a> · <a href="analysis_presentation.html">Presentation</a></p>
+</section>
+<section>
+<h2>Region priority</h2>
+<p>Compare one-hour unscoped and preferred-region floods with a 50% reservation.</p>
+<p><a href="region_priority_analysis.html">Analysis report</a> · <a href="region_priority_presentation.html">Presentation</a></p>
+</section>
+<p><a href="https://github.com/xypiie/MeshCore/tree/experiment/mc-dutycycle">Firmware source and experiment</a></p>
+</main></body>
+</html>
