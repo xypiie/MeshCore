@@ -93,7 +93,7 @@ li {margin:.5em 0}
 <p class="kicker">Baseline · 21 November 2026 · original airtime limiter</p>
 <h2 id="baseline-title">The official repeater-v1.18.0 limiter exceeded 10%</h2>
 <p class="source">Source <a href="mc_2026-11-21_21-30-33_802496116.csv">mc_2026-11-21_21-30-33_802496116.csv</a></p>
-<p class="source">Official firmware tag <code>repeater-v1.18.0</code> · Measured lab build <code>c03a16dc1277954db5098060ba1b93589b3d1486</code> (tag: <code>rflab-baseline-helper</code>)</p>
+<p class="source">Official firmware tag <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.18.0"><code>repeater-v1.18.0</code></a> · Measured lab build <a href="https://github.com/xypiie/MeshCore/commit/c03a16dc1277954db5098060ba1b93589b3d1486"><code>c03a16dc1277954db5098060ba1b93589b3d1486</code></a> (tag: <a href="https://github.com/xypiie/MeshCore/tree/rflab-baseline-helper"><code>rflab-baseline-helper</code></a>)</p>
 <p class="deck">With the limiter configured at 10%, the repeater slowed down after about 14 minutes 44 seconds. Measured occupancy still averaged <strong>12.35%</strong> in the second hour.</p>
 <table>
 <thead><tr><th scope="col">Capture window</th><th scope="col">RF on</th><th scope="col">Duty cycle</th></tr></thead>
@@ -341,7 +341,7 @@ li {margin:.5em 0}
 </section>
 <section aria-labelledby="baseline-explanation">
 <h3 id="baseline-explanation">Why both hours exceeded 10%</h3>
-<p>The baseline lab build adds the test flood command to <code>repeater-v1.18.0</code> and uses the official release’s dispatcher and airtime limiter. The repeater was configured for 10% duty cycle. The reference allowance is <strong>360 seconds in any rolling 60-minute window</strong>. The official limiter tracked a refillable credit balance.</p>
+<p>The baseline lab build adds the test flood command to <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.18.0"><code>repeater-v1.18.0</code></a> and uses the official release’s dispatcher and airtime limiter. The repeater was configured for 10% duty cycle. The reference allowance is <strong>360 seconds in any rolling 60-minute window</strong>. The official limiter tracked a refillable credit balance.</p>
 <h4>First hour · a full starting budget plus ongoing refill</h4>
 <p>The original limiter started with up to 360 seconds of credit and earned another 0.1 seconds of credit for each second of elapsed time, including while transmitting. From empty, an hour of silence would refill the same bucket. That means the initial burst could return after a long idle period, even without rebooting.</p>
 <p>In the opening minute, the median packet lasted 1.722 s and the median silence lasted 1.724 s. That is roughly 50% RF occupancy, drawing down credit at about 0.4 seconds per second after refill. A simple estimate puts the first throttle at about 15 minutes. The first pause longer than three seconds began at <strong>14:43.974</strong> and lasted 6.744 s. By that point, the Flipper had already measured <strong>446.924 s of RF airtime</strong>, more than the allowance for a whole hour.</p>
@@ -509,7 +509,7 @@ li {margin:.5em 0}
 <p class="kicker">Follow-up · 22 November 2026 · rolling airtime limiter</p>
 <h2 id="rolling-limiter-title">Rolling airtime limiter stayed below 10%</h2>
 <p class="source">Source <a href="mc_2026-11-22_22-25-46_892106621.csv">mc_2026-11-22_22-25-46_892106621.csv</a></p>
-<p class="source">Firmware commit <code>b258e94b280f5b0911812c721ab9e6ce41e24e99</code> (tag: <code>rflab-dutycycle-fix</code>)</p>
+<p class="source">Firmware commit <a href="https://github.com/xypiie/MeshCore/commit/b258e94b280f5b0911812c721ab9e6ce41e24e99"><code>b258e94b280f5b0911812c721ab9e6ce41e24e99</code></a> (tag: <a href="https://github.com/xypiie/MeshCore/tree/rflab-dutycycle-fix"><code>rflab-dutycycle-fix</code></a>)</p>
 <p class="deck">The peak rolling hour measured <strong>9.81%</strong>, down from 21.89% in the baseline. Every complete 60-minute window in this capture stayed below the 360-second reference.</p>
 <table>
 <thead><tr><th scope="col">Capture window</th><th scope="col">RF on</th><th scope="col">Duty cycle</th></tr></thead>
