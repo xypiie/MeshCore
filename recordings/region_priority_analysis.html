@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MeshCore region priority analysis</title>
+<style>
+* {box-sizing:border-box}
+body {margin:0;background:#edf2f5;color:#172d3c;font:16px/1.55 system-ui,sans-serif}
+main {max-width:1080px;margin:auto;padding:clamp(14px,3vw,36px)}
+header,section {background:white;border:1px solid #d9e2e8;border-radius:14px;
+                padding:clamp(14px,3vw,28px);margin:0 0 16px}
+h1,h2,h3,p {margin:0 0 .55em}
+h1 {font-size:clamp(1.7rem,4vw,2.6rem);line-height:1.14;letter-spacing:-.025em}
+h2 {font-size:clamp(1.2rem,3vw,1.65rem)}
+h3 {font-size:1.13rem;margin:.85em 0 .4em}
+.kicker {font-size:.78rem;color:#07666a;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
+.source {color:#495d6a}
+a {color:#175783;overflow-wrap:anywhere}
+table {border-collapse:collapse;width:100%;margin:1em 0;font-variant-numeric:tabular-nums}
+th,td {border-bottom:1px solid #d9e2e8;padding:.5em;text-align:right}
+th:first-child,td:first-child {text-align:left}
+figure {margin:1em 0 0}
+figure svg {display:block;width:100%;height:auto}
+figure svg text {font:12px system-ui,sans-serif;fill:#425966}
+figure svg .annotation {font-weight:650;fill:#172d3c;paint-order:stroke;stroke:#f5f8fa;stroke-width:4px;stroke-linejoin:round}
+.grid,.target,.throttle {fill:none}
+.grid {stroke:#d9e2e8}
+.target {stroke:#a43b27;stroke-width:1.6;stroke-dasharray:6 4;pointer-events:none}
+.throttle {stroke:#35515e;stroke-dasharray:2 3}
+.bar:hover {fill:#304653}
+figcaption {color:#495d6a;font-size:.9rem}
+</style>
+</head>
+<body><main>
+<header>
+<p class="kicker">MeshCore repeater</p>
+<h1>Region priority analysis</h1>
+<p class="source"><a href="analysis.html">Airtime analysis</a> · <a href="region_priority_presentation.html">Region priority presentation</a></p>
+</header>
+<section id="region-priority" aria-labelledby="region-priority-title">
+<h2 id="region-priority-title">Reserve airtime for operator traffic</h2>
+<p>A busy repeater can spend its available airtime on routine traffic just when its operator needs it for planned maintenance or coordination during an emergency. Region priority lets the operator designate one named MeshCore scope and protect part of the airtime for traffic sent as floods in that scope.</p>
+<p><a href="analysis.html#dutycycle-burst"><code>dutycycle.burst</code></a> first divides the rolling-hour allowance into burst and paced quotas. The region reservation then protects up to 50% of each quota for the preferred scope. At 10% duty cycle, a 50/50 burst split and a 50% region reservation divide the 360 s allowance as follows.</p>
+<table>
+<thead><tr><th scope="col">Quota</th><th scope="col">Shared</th><th scope="col">Preferred region only</th><th scope="col">Total</th></tr></thead>
+<tbody>
+<tr><th scope="row">Burst</th><td>90 s</td><td>90 s</td><td>180 s</td></tr>
+<tr><th scope="row">Paced</th><td>90 s</td><td>90 s</td><td>180 s</td></tr>
+<tr><th scope="row">Rolling hour</th><td>180 s</td><td>180 s</td><td>360 s</td></tr>
+</tbody>
+</table>
+<h3>How a preferred packet goes first</h3>
+<p>Ordinary traffic can spend only the shared portion. A flood in the preferred region uses its reservation first and can also draw from shared airtime. Ordinary and reserved traffic have separate pacing timers. Unscoped traffic and direct-routed management packets use the shared quotas, so an operator who wants to use the reserve must send through the preferred scope.</p>
+<p>Once a preferred packet is due, it can hold back a shorter ordinary packet while it waits for enough credit. This prevents smaller packets from consuming the shared airtime the preferred packet is waiting for. Ordinary packets can still go out while the preferred packet is scheduled for a later time.</p>
+<p class="source">Host-side tests verify both queue cases. See <a href="../test/test_flood_test/test_flood_test.cpp">the dispatcher regression tests</a>, specifically <code>DuePreferredFrameBlocksASmallerOrdinaryFrame</code> and <code>FuturePreferredFrameDoesNotBlockAnOrdinaryFrame</code>. The RF comparison measures how much airtime each flood can use in separate runs.</p>
+</section>
+<section id="unscoped-recording" aria-labelledby="unscoped-recording-title">
+<p class="kicker">Unscoped flood · 24 November 2026</p>
+<h2 id="unscoped-recording-title">Unscoped traffic used 4.93% of the hour</h2>
+<p class="source">Source CSV <a href="mc_2026-11-24_21-30-49_1061484907.csv">mc_2026-11-24_21-30-49_1061484907.csv</a></p>
+<p class="source">Repeater build <code>v1.18.0+rflab+txburst+prio_piie</code> · Region-priority implementation <code>6a5620b469a4e7692813a8c19b07dafee884bab6</code></p>
+<p>The repeater ran <code>flood 3600</code> with duty cycle set to 10%, burst split to 50%, and a 50% reservation for <code>notfunk</code>. The unscoped flood could use 90 s of shared burst airtime and 90 s of shared paced airtime. The Flipper measured <strong>177.376 s on air</strong> out of 3,600 s, just <strong>2.624 s below</strong> the 180 s shared allowance.</p>
+<figure><svg viewBox="0 0 950 255" role="img" aria-label="RF occupancy per minute during the unscoped flood">
+<title>RF occupancy per minute during the unscoped flood</title>
+<desc>The first two minutes are near 50 percent. Pacing begins at 2 minutes 20 seconds. The complete hour averages 4.93 percent.</desc>
+<rect x="66" y="22" width="856" height="184" fill="#f5f8fa"/>
+<path class="grid" d="M66 206.00H922"/><text text-anchor="end" x="56" y="210.00">0%</text>
+<path class="grid" d="M66 175.33H922"/><text text-anchor="end" x="56" y="179.33">10%</text>
+<path class="grid" d="M66 144.67H922"/><text text-anchor="end" x="56" y="148.67">20%</text>
+<path class="grid" d="M66 114.00H922"/><text text-anchor="end" x="56" y="118.00">30%</text>
+<path class="grid" d="M66 83.33H922"/><text text-anchor="end" x="56" y="87.33">40%</text>
+<path class="grid" d="M66 52.67H922"/><text text-anchor="end" x="56" y="56.67">50%</text>
+<path class="grid" d="M66 22.00H922"/><text text-anchor="end" x="56" y="26.00">60%</text>
+<path class="grid" d="M66.00 22V206"/><text text-anchor="middle" x="66.00" y="227">0</text>
+<path class="grid" d="M208.67 22V206"/><text text-anchor="middle" x="208.67" y="227">10</text>
+<path class="grid" d="M351.33 22V206"/><text text-anchor="middle" x="351.33" y="227">20</text>
+<path class="grid" d="M494.00 22V206"/><text text-anchor="middle" x="494.00" y="227">30</text>
+<path class="grid" d="M636.67 22V206"/><text text-anchor="middle" x="636.67" y="227">40</text>
+<path class="grid" d="M779.33 22V206"/><text text-anchor="middle" x="779.33" y="227">50</text>
+<path class="grid" d="M922.00 22V206"/><text text-anchor="middle" x="922.00" y="227">60</text>
+<rect class="bar" x="66.35" y="40.70" width="13.57" height="165.30" fill="#07666a"><title>Minute 0–1: 53.90% · 32.342 s RF on</title></rect>
+<rect class="bar" x="80.62" y="41.39" width="13.57" height="164.61" fill="#07666a"><title>Minute 1–2: 53.68% · 32.206 s RF on</title></rect>
+<rect class="bar" x="94.88" y="148.17" width="13.57" height="57.83" fill="#07666a"><title>Minute 2–3: 18.86% · 11.314 s RF on</title></rect>
+<rect class="bar" x="109.15" y="184.95" width="13.57" height="21.05" fill="#07666a"><title>Minute 3–4: 6.86% · 4.118 s RF on</title></rect>
+<rect class="bar" x="123.42" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 4–5: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="137.68" y="206.00" width="13.57" height="0.00" fill="#07666a"><title>Minute 5–6: 0.00% · 0.000 s RF on</title></rect>
+<rect class="bar" x="151.95" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 6–7: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="166.22" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 7–8: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="180.48" y="197.21" width="13.57" height="8.79" fill="#07666a"><title>Minute 8–9: 2.87% · 1.720 s RF on</title></rect>
+<rect class="bar" x="194.75" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 9–10: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="209.02" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 10–11: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="223.28" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 11–12: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="237.55" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 12–13: 2.87% · 1.721 s RF on</title></rect>
+<rect class="bar" x="251.82" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 13–14: 2.87% · 1.721 s RF on</title></rect>
+<rect class="bar" x="266.08" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 14–15: 2.87% · 1.721 s RF on</title></rect>
+<rect class="bar" x="280.35" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 15–16: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="294.62" y="197.21" width="13.57" height="8.79" fill="#07666a"><title>Minute 16–17: 2.87% · 1.720 s RF on</title></rect>
+<rect class="bar" x="308.88" y="206.00" width="13.57" height="0.00" fill="#07666a"><title>Minute 17–18: 0.00% · 0.000 s RF on</title></rect>
+<rect class="bar" x="323.15" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 18–19: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="337.42" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 19–20: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="351.68" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 20–21: 2.87% · 1.721 s RF on</title></rect>
+<rect class="bar" x="365.95" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 21–22: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="380.22" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 22–23: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="394.48" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 23–24: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="408.75" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 24–25: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="423.02" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 25–26: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="437.28" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 26–27: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="451.55" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 27–28: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="465.82" y="203.89" width="13.57" height="2.11" fill="#07666a"><title>Minute 28–29: 0.69% · 0.412 s RF on</title></rect>
+<rect class="bar" x="480.08" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 29–30: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="494.35" y="199.54" width="13.57" height="6.46" fill="#07666a"><title>Minute 30–31: 2.11% · 1.264 s RF on</title></rect>
+<rect class="bar" x="508.62" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 31–32: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="522.88" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 32–33: 2.87% · 1.721 s RF on</title></rect>
+<rect class="bar" x="537.15" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 33–34: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="551.42" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 34–35: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="565.68" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 35–36: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="579.95" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 36–37: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="594.22" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 37–38: 2.87% · 1.721 s RF on</title></rect>
+<rect class="bar" x="608.48" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 38–39: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="622.75" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 39–40: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="637.02" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 40–41: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="651.28" y="206.00" width="13.57" height="0.00" fill="#07666a"><title>Minute 41–42: 0.00% · 0.000 s RF on</title></rect>
+<rect class="bar" x="665.55" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 42–43: 2.87% · 1.721 s RF on</title></rect>
+<rect class="bar" x="679.82" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 43–44: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="694.08" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 44–45: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="708.35" y="193.25" width="13.57" height="12.75" fill="#07666a"><title>Minute 45–46: 4.16% · 2.494 s RF on</title></rect>
+<rect class="bar" x="722.62" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 46–47: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="736.88" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 47–48: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="751.15" y="206.00" width="13.57" height="0.00" fill="#07666a"><title>Minute 48–49: 0.00% · 0.000 s RF on</title></rect>
+<rect class="bar" x="765.42" y="197.19" width="13.57" height="8.81" fill="#07666a"><title>Minute 49–50: 2.87% · 1.723 s RF on</title></rect>
+<rect class="bar" x="779.68" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 50–51: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="793.95" y="194.93" width="13.57" height="11.07" fill="#07666a"><title>Minute 51–52: 3.61% · 2.165 s RF on</title></rect>
+<rect class="bar" x="808.22" y="197.19" width="13.57" height="8.81" fill="#07666a"><title>Minute 52–53: 2.87% · 1.723 s RF on</title></rect>
+<rect class="bar" x="822.48" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 53–54: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="836.75" y="187.14" width="13.57" height="18.86" fill="#07666a"><title>Minute 54–55: 6.15% · 3.690 s RF on</title></rect>
+<rect class="bar" x="851.02" y="197.20" width="13.57" height="8.80" fill="#07666a"><title>Minute 55–56: 2.87% · 1.722 s RF on</title></rect>
+<rect class="bar" x="865.28" y="180.76" width="13.57" height="25.24" fill="#07666a"><title>Minute 56–57: 8.23% · 4.939 s RF on</title></rect>
+<rect class="bar" x="879.55" y="188.41" width="13.57" height="17.59" fill="#07666a"><title>Minute 57–58: 5.74% · 3.442 s RF on</title></rect>
+<rect class="bar" x="893.82" y="197.19" width="13.57" height="8.81" fill="#07666a"><title>Minute 58–59: 2.87% · 1.723 s RF on</title></rect>
+<rect class="bar" x="908.08" y="189.49" width="13.57" height="16.51" fill="#07666a"><title>Minute 59–60: 5.38% · 3.230 s RF on</title></rect>
+<path class="throttle" d="M99.18 22V206"/>
+<text class="annotation" x="109.18" y="40">2:20 · first long pause</text>
+<path class="target" d="M66 190.67H922"/>
+<text text-anchor="middle" x="494" y="248">Elapsed time (minutes)</text></svg>
+<figcaption>Each bar shows one minute of measured RF activity. The dashed line marks the 5% shared allowance over a full hour. Individual minutes can exceed it during a burst. Hover over a bar to see its measured airtime.</figcaption>
+</figure>
+<h3>What the trace shows</h3>
+<p>The first two minutes show about 54% RF occupancy. The first long pause began at <strong>02:19.551</strong> and lasted <strong>63.718 s</strong>. The Flipper had measured 75.862 s above the threshold by then. That is an RF measurement, while the nominal 90 s burst quota is the repeater’s internal accounting.</p>
+<p>From 4:00 through 56:40, the median packet lasted 1.722 s and the median pause was about 63.72 s. That matches the expected spacing. Pacing 90 s over 57 minutes gives a start-to-start interval about 38 times the packet airtime, or about 65.44 s for a typical packet.</p>
+<p>This one-hour recording contains one complete 60-minute window. It shows that the unscoped flood stayed within its shared allowance despite having steady traffic to send. Compare this with the <a href="#scoped-recording">preferred-region capture</a>.</p>
+<p class="source">Measured on a Flipper Zero running <a href="https://github.com/xypiie/MC-Dutycycle">MC-Dutycycle</a>, at about 869.618 MHz with a −60 dBm threshold. The CSV has 1,799,131 RSSI samples, a maximum gap of 3 ms, and zero dropped records.</p>
+</section>
+<section id="scoped-recording" aria-labelledby="scoped-recording-title">
+<p class="kicker">Preferred-region flood · 24 November 2026</p>
+<h2 id="scoped-recording-title">Preferred traffic used 9.57% of the hour</h2>
+<p class="source">Source CSV <a href="mc_2026-11-24_22-47-30_1066085950.csv">mc_2026-11-24_22-47-30_1066085950.csv</a></p>
+<p class="source">Repeater build <code>v1.18.0+rflab+txburst+prio_piie</code> · Region-priority implementation <code>6a5620b469a4e7692813a8c19b07dafee884bab6</code></p>
+<p>After rebooting the repeater and confirming the saved 50% reservation, the test ran <code>flood 3600 notfunk</code>. The duty cycle stayed at 10%, with the burst split at 50%. The preferred flood could use both the shared and reserved quotas.</p>
+<table>
+<thead><tr><th scope="col">One-hour run</th><th scope="col">Available airtime</th><th scope="col">Measured RF on</th><th scope="col">Duty cycle</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="#unscoped-recording">Unscoped</a></th><td>180 s</td><td>177.376 s</td><td>4.93%</td></tr>
+<tr><th scope="row">Preferred region (<code>notfunk</code>)</th><td>360 s</td><td>344.673 s</td><td>9.57%</td></tr>
+</tbody>
+</table>
+<p>The preferred flood used <strong>167.297 s more airtime</strong>, about <strong>1.94 times</strong> the unscoped result. It finished 15.327 s below the full allowance.</p>
+<figure><svg viewBox="0 0 950 255" role="img" aria-label="RF occupancy per minute during the preferred-region flood">
+<title>RF occupancy per minute during the preferred-region flood</title>
+<desc>The preferred flood starts with a burst, then begins pacing at 5 minutes 52 seconds. The complete hour averages 9.57 percent.</desc>
+<rect x="66" y="22" width="856" height="184" fill="#f5f8fa"/>
+<path class="grid" d="M66 206.00H922"/><text text-anchor="end" x="56" y="210.00">0%</text>
+<path class="grid" d="M66 175.33H922"/><text text-anchor="end" x="56" y="179.33">10%</text>
+<path class="grid" d="M66 144.67H922"/><text text-anchor="end" x="56" y="148.67">20%</text>
+<path class="grid" d="M66 114.00H922"/><text text-anchor="end" x="56" y="118.00">30%</text>
+<path class="grid" d="M66 83.33H922"/><text text-anchor="end" x="56" y="87.33">40%</text>
+<path class="grid" d="M66 52.67H922"/><text text-anchor="end" x="56" y="56.67">50%</text>
+<path class="grid" d="M66 22.00H922"/><text text-anchor="end" x="56" y="26.00">60%</text>
+<path class="grid" d="M66.00 22V206"/><text text-anchor="middle" x="66.00" y="227">0</text>
+<path class="grid" d="M208.67 22V206"/><text text-anchor="middle" x="208.67" y="227">10</text>
+<path class="grid" d="M351.33 22V206"/><text text-anchor="middle" x="351.33" y="227">20</text>
+<path class="grid" d="M494.00 22V206"/><text text-anchor="middle" x="494.00" y="227">30</text>
+<path class="grid" d="M636.67 22V206"/><text text-anchor="middle" x="636.67" y="227">40</text>
+<path class="grid" d="M779.33 22V206"/><text text-anchor="middle" x="779.33" y="227">50</text>
+<path class="grid" d="M922.00 22V206"/><text text-anchor="middle" x="922.00" y="227">60</text>
+<rect class="bar" x="66.35" y="45.79" width="13.57" height="160.21" fill="#07666a"><title>minute 0–1: 52.24% · 31.346 s RF on</title></rect>
+<rect class="bar" x="80.62" y="50.85" width="13.57" height="155.15" fill="#07666a"><title>minute 1–2: 50.59% · 30.356 s RF on</title></rect>
+<rect class="bar" x="94.88" y="43.30" width="13.57" height="162.70" fill="#07666a"><title>minute 2–3: 53.05% · 31.832 s RF on</title></rect>
+<rect class="bar" x="109.15" y="53.58" width="13.57" height="152.42" fill="#07666a"><title>minute 3–4: 49.70% · 29.822 s RF on</title></rect>
+<rect class="bar" x="123.42" y="49.82" width="13.57" height="156.18" fill="#07666a"><title>minute 4–5: 50.93% · 30.556 s RF on</title></rect>
+<rect class="bar" x="137.68" y="71.46" width="13.57" height="134.54" fill="#07666a"><title>minute 5–6: 43.87% · 26.323 s RF on</title></rect>
+<rect class="bar" x="151.95" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 6–7: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="166.22" y="197.02" width="13.57" height="8.98" fill="#07666a"><title>minute 7–8: 2.93% · 1.756 s RF on</title></rect>
+<rect class="bar" x="180.48" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 8–9: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="194.75" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 9–10: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="209.02" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 10–11: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="223.28" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 11–12: 5.85% · 3.509 s RF on</title></rect>
+<rect class="bar" x="237.55" y="193.23" width="13.57" height="12.77" fill="#07666a"><title>minute 12–13: 4.16% · 2.498 s RF on</title></rect>
+<rect class="bar" x="251.82" y="191.87" width="13.57" height="14.13" fill="#07666a"><title>minute 13–14: 4.61% · 2.765 s RF on</title></rect>
+<rect class="bar" x="266.08" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 14–15: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="280.35" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 15–16: 5.85% · 3.509 s RF on</title></rect>
+<rect class="bar" x="294.62" y="191.58" width="13.57" height="14.42" fill="#07666a"><title>minute 16–17: 4.70% · 2.822 s RF on</title></rect>
+<rect class="bar" x="308.88" y="193.52" width="13.57" height="12.48" fill="#07666a"><title>minute 17–18: 4.07% · 2.441 s RF on</title></rect>
+<rect class="bar" x="323.15" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 18–19: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="337.42" y="188.08" width="13.57" height="17.92" fill="#07666a"><title>minute 19–20: 5.84% · 3.507 s RF on</title></rect>
+<rect class="bar" x="351.68" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 20–21: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="365.95" y="197.04" width="13.57" height="8.96" fill="#07666a"><title>minute 21–22: 2.92% · 1.753 s RF on</title></rect>
+<rect class="bar" x="380.22" y="190.59" width="13.57" height="15.41" fill="#07666a"><title>minute 22–23: 5.03% · 3.015 s RF on</title></rect>
+<rect class="bar" x="394.48" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 23–24: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="408.75" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 24–25: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="423.02" y="188.45" width="13.57" height="17.55" fill="#07666a"><title>minute 25–26: 5.72% · 3.434 s RF on</title></rect>
+<rect class="bar" x="437.28" y="197.03" width="13.57" height="8.97" fill="#07666a"><title>minute 26–27: 2.92% · 1.755 s RF on</title></rect>
+<rect class="bar" x="451.55" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 27–28: 5.85% · 3.509 s RF on</title></rect>
+<rect class="bar" x="465.82" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 28–29: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="480.08" y="197.04" width="13.57" height="8.96" fill="#07666a"><title>minute 29–30: 2.92% · 1.754 s RF on</title></rect>
+<rect class="bar" x="494.35" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 30–31: 5.85% · 3.509 s RF on</title></rect>
+<rect class="bar" x="508.62" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 31–32: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="522.88" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 32–33: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="537.15" y="197.04" width="13.57" height="8.96" fill="#07666a"><title>minute 33–34: 2.92% · 1.754 s RF on</title></rect>
+<rect class="bar" x="551.42" y="189.23" width="13.57" height="16.77" fill="#07666a"><title>minute 34–35: 5.47% · 3.281 s RF on</title></rect>
+<rect class="bar" x="565.68" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 35–36: 5.85% · 3.509 s RF on</title></rect>
+<rect class="bar" x="579.95" y="197.04" width="13.57" height="8.96" fill="#07666a"><title>minute 36–37: 2.92% · 1.754 s RF on</title></rect>
+<rect class="bar" x="594.22" y="193.26" width="13.57" height="12.74" fill="#07666a"><title>minute 37–38: 4.15% · 2.492 s RF on</title></rect>
+<rect class="bar" x="608.48" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 38–39: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="622.75" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 39–40: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="637.02" y="197.04" width="13.57" height="8.96" fill="#07666a"><title>minute 40–41: 2.92% · 1.754 s RF on</title></rect>
+<rect class="bar" x="651.28" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 41–42: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="665.55" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 42–43: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="679.82" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 43–44: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="694.08" y="194.77" width="13.57" height="11.23" fill="#07666a"><title>minute 44–45: 3.66% · 2.198 s RF on</title></rect>
+<rect class="bar" x="708.35" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 45–46: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="722.62" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 46–47: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="736.88" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 47–48: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="751.15" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 48–49: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="765.42" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 49–50: 5.85% · 3.508 s RF on</title></rect>
+<rect class="bar" x="779.68" y="197.04" width="13.57" height="8.96" fill="#07666a"><title>minute 50–51: 2.92% · 1.754 s RF on</title></rect>
+<rect class="bar" x="793.95" y="188.07" width="13.57" height="17.93" fill="#07666a"><title>minute 51–52: 5.85% · 3.509 s RF on</title></rect>
+<rect class="bar" x="808.22" y="194.77" width="13.57" height="11.23" fill="#07666a"><title>minute 52–53: 3.66% · 2.198 s RF on</title></rect>
+<rect class="bar" x="822.48" y="194.82" width="13.57" height="11.18" fill="#07666a"><title>minute 53–54: 3.65% · 2.187 s RF on</title></rect>
+<rect class="bar" x="836.75" y="190.27" width="13.57" height="15.73" fill="#07666a"><title>minute 54–55: 5.13% · 3.077 s RF on</title></rect>
+<rect class="bar" x="851.02" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 55–56: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="865.28" y="188.06" width="13.57" height="17.94" fill="#07666a"><title>minute 56–57: 5.85% · 3.510 s RF on</title></rect>
+<rect class="bar" x="879.55" y="185.79" width="13.57" height="20.21" fill="#07666a"><title>minute 57–58: 6.59% · 3.954 s RF on</title></rect>
+<rect class="bar" x="893.82" y="195.82" width="13.57" height="10.18" fill="#07666a"><title>minute 58–59: 3.32% · 1.992 s RF on</title></rect>
+<rect class="bar" x="908.08" y="189.27" width="13.57" height="16.73" fill="#07666a"><title>minute 59–60: 5.46% · 3.273 s RF on</title></rect>
+<path class="throttle" d="M149.80 22V206"/>
+<text class="annotation" x="159.80" y="40">5:52 · first long pause</text>
+<path class="target" d="M66 175.33H922"/>
+<text text-anchor="middle" x="494" y="248">Elapsed time (minutes)</text></svg>
+<figcaption>Each bar shows one minute of the preferred-region run. The dashed line marks the 10% allowance over a full hour. This chart uses the same axes as the unscoped chart. Hover over a bar to see its measured airtime.</figcaption>
+</figure>
+<h3>What the trace shows</h3>
+<p>The first long pause in the preferred run began at <strong>05:52.422</strong> and lasted 26.284 s. By then, the Flipper had measured <strong>180.235 s</strong> above threshold, close to the combined 180 s burst quotas. The startup burst lasted longer than the unscoped burst, which reached its first long pause at 02:19.551.</p>
+<p>After the burst, the preferred flood could draw from two independent paced quotas. In minutes 10–53, the median time from one observed RF start to the RF start two events later was 66.695 s. For a typical 1.754 s frame, each 90 s paced quota predicts a start-to-start interval of about 66.65 s. The trace is consistent with two interleaved streams. The Flipper measures RF energy and cannot assign individual packets to a quota.</p>
+<p>These two one-hour captures compare airtime access under the same reservation. The <a href="../test/test_flood_test/test_flood_test.cpp">host-side dispatcher tests</a> verify queue ordering when preferred and ordinary packets compete.</p>
+<p class="source">Measurement at about 869.618 MHz above −60 dBm. The CSV has 1,798,515 RSSI samples, a maximum gap of 3 ms, and zero dropped records.</p>
+</section>
+<section id="command-reference" aria-labelledby="command-reference-title">
+<h2 id="command-reference-title">Repeater command reference</h2>
+<p>Set the duty cycle and burst split, create the preferred region, allow floods, reserve airtime, and save. Replace <code>notfunk</code> with your region name.</p>
+<pre><code>set dutycycle 10
+set dutycycle.burst 50
+region put notfunk
+region allowf notfunk
+region prio notfunk 50
+region save
+region get notfunk
+region prio</code></pre>
+<p><code>region get notfunk</code> should show <code>F</code> for flood allowed. <code>region prio</code> displays the active reservation. Use <code>region prio notfunk 0</code> followed by <code>region save</code> to disable it.</p>
+<p>Run the two test commands separately. The first is unscoped and the second uses the preferred scope.</p>
+<pre><code>flood 3600
+flood 3600 notfunk</code></pre>
+<p>Use <code>flood status</code> to check progress or <code>flood stop</code> to end a run early.</p>
+</section>
+</main></body></html>

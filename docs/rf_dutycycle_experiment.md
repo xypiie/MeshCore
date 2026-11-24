@@ -2,7 +2,7 @@
 
 This experiment is based on MeshCore **81dbae59** and targets an attended
 Heltec V3 repeater in an RF shielded lab. It adds a local-terminal traffic producer and the
-[MC-Dutycycle Flipper app](../tools/flipper-dutycycle/README.md).
+[MC-Dutycycle Flipper app](https://github.com/xypiie/MC-Dutycycle).
 Commit `c03a16dc` used the original limiter for the baseline measurement.
 Current builds divide the rolling TX allowance into burst and paced quotas.
 The saved `dutycycle.burst` setting defaults to a 50/50 split.
